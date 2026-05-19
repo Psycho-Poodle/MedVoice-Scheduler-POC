@@ -184,6 +184,65 @@ body {
 .schedule-grid { display: grid; gap: 8px; margin-top: 8px; }
 .confirm { background: var(--primary); color: #fff; }
 
+.datetime-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+  max-width: 680px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #cfe1f5;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(37, 99, 235, 0.08);
+}
+
+.datetime-picker.compact {
+  grid-template-columns: 1fr;
+  margin: 0;
+  box-shadow: none;
+}
+
+.datetime-picker label {
+  display: block;
+  margin-bottom: 5px;
+  color: #607086;
+  font-size: 0.78rem;
+}
+
+.datetime-picker input, .datetime-picker button {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+}
+
+.datetime-picker button {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+  cursor: pointer;
+}
+
+.summary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.summary-actions button {
+  cursor: pointer;
+}
+
+.danger-btn {
+  border-color: #fecaca !important;
+  background: #fff1f2 !important;
+  color: #be123c;
+}
+
 .insights { margin: 0; padding: 0 16px; color: #455a74; }
 
 @media (max-width: 1160px) {
@@ -191,4 +250,5 @@ body {
   .left-sidebar { order: 2; }
   .chat-main { order: 1; min-height: 70vh; }
   .right-panel { order: 3; }
+  .datetime-picker { grid-template-columns: 1fr; }
 }
