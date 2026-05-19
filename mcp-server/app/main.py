@@ -2,10 +2,16 @@
 
 from fastapi import FastAPI
 
+from app.bootstrap import bootstrap_database
 from app.mcp_tools import mcp_server
 from app.tool_schemas import TOOL_SCHEMAS
 
 app = FastAPI(title="MedVoice Scheduler MCP Server", version="0.1.0")
+
+
+@app.on_event("startup")
+def startup() -> None:
+    bootstrap_database()
 
 
 @app.get("/health")
