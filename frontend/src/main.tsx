@@ -309,6 +309,13 @@ function doctorAppointmentDetails(doctor: Doctor, start: Date, visitType: VisitT
   ].filter(Boolean).join("\n");
 }
 
+function appointmentStatusLabel(session: ConversationSession): string {
+  if (session.stage === "completed" && session.draft.intent === "cancel") return "Cancelled";
+  if (session.stage === "completed") return "Confirmed";
+  if (session.stage === "await_confirmation") return "Pending confirmation";
+  return "In progress";
+}
+
 function App() {
   const [lang, setLang] = useState<Lang>("en");
   const dir = lang === "ar" ? "rtl" : "ltr";
@@ -757,7 +764,7 @@ function App() {
 
       <aside className="right-panel panel">
         <section><h3>Patient Information</h3><ul className="facts"><li>Patient ID: <strong>{active.patient?.patient_code || "-"}</strong></li><li>Name: <strong>{active.patient ? `${active.patient.first_name} ${active.patient.last_name}` : "-"}</strong></li><li>Preferred Language: <strong>{lang.toUpperCase()}</strong></li><li>Status: <strong className={active.verified ? "ok" : "warn"}>{active.verified ? "Verified" : "Pending"}</strong></li></ul></section>
-        <section><h3>Appointment Summary</h3><div className="confirm-card"><p><strong>Patient Name:</strong> {active.patient ? `${active.patient.first_name} ${active.patient.last_name}` : "-"}</p><p><strong>Doctor:</strong> {active.draft.doctor ? `Dr. ${active.draft.doctor.first_name} ${active.draft.doctor.last_name}` : "-"}</p><p><strong>Date:</strong> {active.draft.start ? formatDate(active.draft.start) : "-"}</p><p><strong>Time:</strong> {active.draft.start ? formatTime(active.draft.start) : "-"}</p><p><strong>Appointment type:</strong> {active.draft.visitType.replace("_", " ")}</p><p><strong>Code:</strong> {active.draft.appointmentCode || "-"}</p><p><strong>Status:</strong> {active.stage === "completed" ? "Confirmed" : active.stage === "await_confirmation" ? "Pending confirmation" : "In progress"}</p>{active.stage === "completed" && active.draft.appointmentCode && active.draft.intent !== "cancel" && (<div className="summary-actions"><button onClick={startReschedule}>Reschedule</button><button className="danger-btn" onClick={startCancel}>Cancel Appointment</button></div>)}</div></section>
+        <section><h3>Appointment Summary</h3><div className="confirm-card"><p><strong>Patient Name:</strong> {active.patient ? `${active.patient.first_name} ${active.patient.last_name}` : "-"}</p><p><strong>Doctor:</strong> {active.draft.doctor ? `Dr. ${active.draft.doctor.first_name} ${active.draft.doctor.last_name}` : "-"}</p><p><strong>Date:</strong> {active.draft.start ? formatDate(active.draft.start) : "-"}</p><p><strong>Time:</strong> {active.draft.start ? formatTime(active.draft.start) : "-"}</p><p><strong>Appointment type:</strong> {active.draft.visitType.replace("_", " ")}</p><p><strong>Code:</strong> {active.draft.appointmentCode || "-"}</p><p><strong>Status:</strong> {appointmentStatusLabel(active)}</p>{active.stage === "completed" && active.draft.appointmentCode && active.draft.intent !== "cancel" && (<div className="summary-actions"><button onClick={startReschedule}>Reschedule</button><button className="danger-btn" onClick={startCancel}>Cancel Appointment</button></div>)}</div></section>
         {active.stage === "ask_datetime" && active.draft.doctor && (
           <section><h3>Pick Date & Time</h3><DateTimePicker date={pickerDate} time={pickerTime} onDate={setPickerDate} onTime={setPickerTime} onSubmit={submitPickerValue} compact /></section>
         )}
