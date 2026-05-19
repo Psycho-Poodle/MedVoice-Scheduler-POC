@@ -96,6 +96,7 @@ const phrases = {
     needDoctor: "Before confirmation, please tell me the doctor or department.",
     needDateTime: "Before confirmation, please share date and time.",
     noDoctors: "I could not load doctors right now. Please try again in a moment.",
+    emptyDoctors: "No doctors are available in the database yet. Please redeploy the backend or seed the database, then try again.",
     invalidDate: "I could not understand that date/time. Please try like: tomorrow 10:30 AM.",
     unavailable: "This slot is not available. I can help you choose another time.",
     askAppointmentCode: "Please share your appointment code so I can proceed.",
@@ -117,6 +118,7 @@ const phrases = {
     needDoctor: "قبل التأكيد، يرجى تحديد الطبيب أو القسم.",
     needDateTime: "قبل التأكيد، يرجى تحديد التاريخ والوقت.",
     noDoctors: "تعذر تحميل قائمة الأطباء حالياً. حاول مرة أخرى بعد قليل.",
+    emptyDoctors: "لا توجد بيانات أطباء في قاعدة البيانات حالياً. يرجى إعادة نشر الخادم أو تهيئة قاعدة البيانات ثم المحاولة مرة أخرى.",
     invalidDate: "لم أتمكن من فهم التاريخ/الوقت. جرّب مثلاً: غداً 10:30 صباحاً.",
     unavailable: "هذا الموعد غير متاح. أستطيع مساعدتك في اختيار وقت آخر.",
     askAppointmentCode: "يرجى تزويدي برمز الموعد للمتابعة.",
@@ -369,9 +371,11 @@ function App() {
   const fetchDoctors = async (): Promise<Doctor[]> => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/doctors/search`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      if (!res.ok) throw new Error("doctor search failed");
       const data = await res.json();
       const list = Array.isArray(data) ? data : [];
       setDoctors(list);
+      if (!list.length) addMsg("assistant", p.emptyDoctors);
       return list;
     } catch {
       addMsg("assistant", p.noDoctors);

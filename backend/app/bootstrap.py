@@ -38,7 +38,7 @@ def bootstrap_database() -> None:
     if init_sql.exists():
         _execute_sql_file(init_sql)
 
-    seed_enabled = os.getenv("DB_SEED_ON_STARTUP", "").lower() in {"1", "true", "yes"}
+    seed_enabled = os.getenv("DB_SEED_ON_STARTUP", "true").lower() in {"1", "true", "yes"}
     seed_sql = sql_dir / "seed.sql"
     if not seed_enabled or not seed_sql.exists():
         return
