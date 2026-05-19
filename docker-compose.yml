@@ -1,0 +1,89 @@
+﻿
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: medvoice-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: medvoice-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV}
+      LOG_LEVEL: ${LOG_LEVEL}
+      BACKEND_HOST: ${BACKEND_HOST}
+      BACKEND_PORT: ${BACKEND_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+      PGVECTOR_DIMENSIONS: ${PGVECTOR_DIMENSIONS}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    container_name: medvoice-mcp-server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV}
+      LOG_LEVEL: ${LOG_LEVEL}
+      MCP_HOST: ${MCP_HOST}
+      MCP_PORT: ${MCP_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "${MCP_PORT:-8100}:8100"
+    volumes:
+      - ./mcp-server:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: medvoice-frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+      - mcp-server
+
+volumes:
+  postgres_data:
