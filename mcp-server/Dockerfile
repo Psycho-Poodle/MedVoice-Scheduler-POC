@@ -19,4 +19,4 @@ COPY mcp-server/ /app
 
 EXPOSE 8100
 
-CMD ["sh", "-lc", "uvicorn app.main:app --host 0.0.0.0 --port \$PORT --reload"]
+CMD ["sh", "-lc", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8100}"]

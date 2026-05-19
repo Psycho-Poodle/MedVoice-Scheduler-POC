@@ -23,8 +23,8 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: medvoice-backend
     restart: unless-stopped
     env_file:
@@ -47,8 +47,8 @@ services:
 
   mcp-server:
     build:
-      context: ./mcp-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: mcp-server/Dockerfile
     container_name: medvoice-mcp-server
     restart: unless-stopped
     env_file:
