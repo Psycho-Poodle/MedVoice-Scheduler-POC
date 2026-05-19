@@ -33,11 +33,4 @@ POC monorepo scaffold for a voice-first medical scheduling system.
 ## Notes
 - This repository currently contains only project structure and configuration.
 - No business logic is implemented yet.
-- Refer to `PRD_MedVoice_Scheduler.md` for product requirements.
 
-## Next Milestones
-- API contract definitions
-- LangGraph workflow skeleton
-- MCP tool definitions
-- DB schema and migration setup
-- UI routes and shell layout
