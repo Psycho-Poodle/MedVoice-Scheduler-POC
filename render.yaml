@@ -1,0 +1,41 @@
+services:
+  - type: web_service
+    name: medvoice-scheduler-backend
+    env: docker
+    dockerfilePath: backend/Dockerfile
+    branch: main
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: medvoice-scheduler-db
+      - key: BACKEND_CORS_ORIGINS
+        value: "*"
+      - key: OPENAI_REALTIME_MODEL
+        value: "gpt-realtime"
+      - key: OPENAI_REALTIME_VOICE
+        value: "alloy"
+  - type: web_service
+    name: medvoice-scheduler-mcp-server
+    env: docker
+    dockerfilePath: mcp-server/Dockerfile
+    branch: main
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: medvoice-scheduler-db
+  - type: static_site
+    name: medvoice-scheduler-frontend
+    env: node
+    root: frontend
+    branch: main
+    plan: free
+    buildCommand: npm install && npm run build
+    publishPath: dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: "https://medvoice-scheduler-backend.onrender.com"
+  - type: postgres
+    name: medvoice-scheduler-db
+    plan: free

@@ -3,6 +3,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8100
 
 WORKDIR /app
 
@@ -18,4 +19,4 @@ COPY . /app
 
 EXPOSE 8100
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100", "--reload"]
+CMD ["sh", "-lc", "uvicorn app.main:app --host 0.0.0.0 --port \$PORT --reload"]
