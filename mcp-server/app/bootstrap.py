@@ -25,7 +25,7 @@ def _statements(sql: str) -> list[str]:
 
 
 def _execute_sql_file(path: Path) -> None:
-    sql = path.read_text(encoding="utf-8")
+    sql = path.read_text(encoding="utf-8-sig")
     with engine.begin() as connection:
         for statement in _statements(sql):
             connection.execute(text(statement))
