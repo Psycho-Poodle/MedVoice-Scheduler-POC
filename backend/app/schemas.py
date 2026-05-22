@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 class AppointmentStatus(str, Enum):
     scheduled = "scheduled"
     confirmed = "confirmed"
+    confirmed_coming = "confirmed_coming"
+    rescheduled = "rescheduled"
+    reminder_called = "reminder_called"
     completed = "completed"
     cancelled = "cancelled"
     no_show = "no_show"
@@ -147,6 +150,45 @@ class RealtimeSessionResponse(BaseModel):
     modalities: list[str] | None = None
     voice: str | None = None
     raw: dict[str, Any]
+
+
+class AssistantSpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    voice: str | None = None
+
+
+class VoiceTranscriptionRequest(BaseModel):
+    audio_base64: str = Field(min_length=1)
+    mime_type: str = "audio/pcm;rate=16000"
+
+
+class VoiceTranscriptionResponse(BaseModel):
+    transcript: str
+
+
+class ConfirmComingRequest(BaseModel):
+    appointment_code: str
+
+
+class VapiRescheduleRequest(BaseModel):
+    appointment_code: str
+    scheduled_start: datetime
+    scheduled_end: datetime
+
+
+class VapiCancelRequest(BaseModel):
+    appointment_code: str
+
+
+class VapiReminderRunResponse(BaseModel):
+    attempted: int
+    started: int
+    errors: list[str] = Field(default_factory=list)
+    calls: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class VapiToolResponse(BaseModel):
+    result: dict[str, Any]
 
 
 class RunAppointmentWorkflowRequest(BaseModel):

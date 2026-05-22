@@ -8,8 +8,15 @@ from typing import Any
 import httpx
 
 REALTIME_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
+OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech"
 DEFAULT_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
 DEFAULT_REALTIME_VOICE = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
+
+
+class OpenAISpeechError(RuntimeError):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _build_realtime_instructions() -> str:
@@ -94,3 +101,27 @@ async def create_realtime_session(*, user_id: str | None = None) -> dict[str, An
         if response.status_code >= 400:
             raise RuntimeError(f"OpenAI realtime error {response.status_code}: {response.text}")
         return response.json()
+
+
+async def synthesize_assistant_speech(*, text: str, voice: str | None = None) -> bytes:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+
+    payload: dict[str, Any] = {
+        "model": DEFAULT_REALTIME_MODEL,
+        "voice": voice or DEFAULT_REALTIME_VOICE,
+        "input": text,
+        "response_format": "mp3",
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(OPENAI_SPEECH_URL, headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise OpenAISpeechError(response.status_code, f"OpenAI speech error {response.status_code}: {response.text}")
+        return response.content

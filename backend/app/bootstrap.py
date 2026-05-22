@@ -38,6 +38,30 @@ def bootstrap_database() -> None:
     if init_sql.exists():
         _execute_sql_file(init_sql)
 
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reminder_last_called_at TIMESTAMPTZ"))
+        connection.execute(text("ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reminder_call_count INTEGER NOT NULL DEFAULT 0"))
+        connection.execute(text("ALTER TABLE appointments ADD COLUMN IF NOT EXISTS vapi_call_id VARCHAR(120)"))
+        connection.execute(text("ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_status_check"))
+        connection.execute(
+            text(
+                """
+                ALTER TABLE appointments
+                ADD CONSTRAINT appointments_status_check
+                CHECK (status IN (
+                    'scheduled',
+                    'confirmed',
+                    'confirmed_coming',
+                    'rescheduled',
+                    'reminder_called',
+                    'completed',
+                    'cancelled',
+                    'no_show'
+                ))
+                """
+            )
+        )
+
     seed_enabled = os.getenv("DB_SEED_ON_STARTUP", "true").lower() in {"1", "true", "yes"}
     seed_sql = sql_dir / "seed.sql"
     if not seed_enabled or not seed_sql.exists():

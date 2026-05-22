@@ -127,10 +127,33 @@ body {
   margin-bottom: 10px;
   line-height: 1.4;
 }
-.bubble .meta { font-size: 0.72rem; opacity: 0.72; margin-bottom: 4px; }
+.bubble-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.bubble .meta { font-size: 0.72rem; opacity: 0.72; }
+.message-text { white-space: pre-line; }
 .bubble.user { margin-inline-start: auto; background: #e8f1ff; }
 .bubble.assistant { background: #e7fbf8; }
 .bubble.system { background: #eef2f7; }
+
+.play-reply-btn {
+  flex: 0 0 auto;
+  border: 1px solid #a7d9d2;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f766e;
+  cursor: pointer;
+  font-size: 0.72rem;
+  line-height: 1;
+  min-width: 48px;
+  padding: 6px 9px;
+}
+
+.play-reply-btn:hover { background: #f0fdfa; }
 
 .chat-input-bar {
   display: grid;

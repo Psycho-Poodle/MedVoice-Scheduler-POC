@@ -4,14 +4,16 @@ import "./styles.css";
 
 type Lang = "en" | "ar";
 type Role = "assistant" | "user" | "system";
-type Stage = "ask_name" | "ask_intent" | "ask_doctor" | "ask_datetime" | "await_confirmation" | "completed";
+type Stage = "ask_name" | "ask_phone" | "ask_intent" | "ask_doctor" | "ask_datetime" | "await_confirmation" | "completed";
 type Intent = "book" | "reschedule" | "cancel" | "unknown";
 type VisitType = "in_person" | "virtual" | "phone";
+type VoiceInputProvider = "gemini" | "browser";
 
 type ChatMessage = {
   id: string;
   role: Role;
   text: string;
+  speechText?: string;
   time: string;
   voice?: boolean;
 };
@@ -29,6 +31,7 @@ type ActivePatient = {
   patient_code: string;
   first_name: string;
   last_name: string;
+  phone?: string | null;
   email?: string | null;
 };
 
@@ -39,6 +42,7 @@ type Draft = {
   pendingStart: Date | null;
   appointmentCode: string | null;
   visitType: VisitType;
+  patientName: string | null;
 };
 
 type ConversationSession = {
@@ -56,6 +60,7 @@ type ConversationSession = {
 declare global {
   interface Window {
     webkitSpeechRecognition?: new () => SpeechRecognition;
+    webkitAudioContext?: typeof AudioContext;
   }
 }
 
@@ -66,6 +71,47 @@ const now = () => new Date().toLocaleTimeString();
 const pad = (value: number) => String(value).padStart(2, "0");
 const toDateInputValue = (value: Date) => `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
 const toTimeInputValue = (value: Date) => `${pad(value.getHours())}:${pad(value.getMinutes())}`;
+
+function downsampleTo16Khz(buffer: Float32Array, inputSampleRate: number): Int16Array {
+  const targetSampleRate = 16000;
+  if (inputSampleRate === targetSampleRate) {
+    return floatTo16BitPcm(buffer);
+  }
+
+  const ratio = inputSampleRate / targetSampleRate;
+  const outputLength = Math.floor(buffer.length / ratio);
+  const output = new Float32Array(outputLength);
+  for (let i = 0; i < outputLength; i += 1) {
+    output[i] = buffer[Math.floor(i * ratio)] || 0;
+  }
+  return floatTo16BitPcm(output);
+}
+
+function floatTo16BitPcm(buffer: Float32Array): Int16Array {
+  const output = new Int16Array(buffer.length);
+  for (let i = 0; i < buffer.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, buffer[i]));
+    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return output;
+}
+
+function pcmChunksToBase64(chunks: Int16Array[]): string {
+  const byteLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(new Uint8Array(chunk.buffer), offset);
+    offset += chunk.byteLength;
+  }
+
+  let binary = "";
+  const batchSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += batchSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + batchSize));
+  }
+  return btoa(binary);
+}
 
 function toDate(value: Date | string | null | undefined): Date | null {
   if (!value) return null;
@@ -82,14 +128,39 @@ const formatTime = (value: Date | string) => {
   return d ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : "-";
 };
 
+function isQuotaError(message: string) {
+  const lower = message.toLowerCase();
+  return lower.includes("429") || lower.includes("quota") || lower.includes("resource_exhausted");
+}
+
+function normalizeTranscript(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  const parts = compact
+    .split(/[.!?\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return compact;
+
+  const last = parts[parts.length - 1];
+  const previous = parts[parts.length - 2];
+  if (last.toLowerCase().startsWith(previous.toLowerCase())) return last;
+  if (previous.toLowerCase().startsWith(last.toLowerCase())) return previous;
+  return compact;
+}
+
 const phrases = {
   en: {
     welcome: "Welcome. I can help you book, reschedule, or cancel an appointment. May I know your full name?",
+    askPhone: "Thank you. Please share your phone number so we can contact you about your appointment.",
+    invalidPhone: "Please enter a valid phone number, including country code if possible. Example: +966500001234.",
     greet: (name: string) => `Thank you ${name}. How can I help you today: booking, rescheduling, or cancellation?`,
     askDoctor: "Please tell me the doctor name or department. You may also say: show doctor list.",
+    chooseDoctor: "Please select a doctor by name, or tell me the department you prefer.",
+    doctorListSpeech: (count: number) => `${count} doctors found. Please select one from the list.`,
     askDateTime: "Please share your preferred date and time. Example: tomorrow 10:00 AM.",
     askConfirm: (doctor: string, dt: Date, visitType: VisitType) => `I found an available ${visitType.replace("_", " ")} slot on ${formatDate(dt)} at ${formatTime(dt)} with ${doctor}. Would you like me to confirm this appointment?`,
     booked: "Your appointment has been booked successfully.",
+    bookedSpeech: "Appointment booked successfully. Details are shown in the chat.",
     thanksReply: "You're welcome. If you want to book, reschedule, or cancel an appointment, please tell me and I’ll help right away.",
     clarification: "I want to make sure I understood correctly. Would you like to book, reschedule, or cancel?",
     fallback: "I’m sorry, I didn’t fully understand. I can help with booking, rescheduling, or cancellation.",
@@ -102,16 +173,22 @@ const phrases = {
     askAppointmentCode: "Please share your appointment code so I can proceed.",
     cancelled: "Your appointment has been cancelled successfully.",
     rescheduled: "Your appointment has been rescheduled successfully.",
+    rescheduledSpeech: "Appointment rescheduled successfully. Updated details are shown in the chat.",
     confirmCancel: "Are you sure you want to cancel this appointment?",
     goodbye: "Thank you for visiting. Wishing you good health.",
   },
   ar: {
     welcome: "مرحباً. يمكنني مساعدتك في حجز أو إعادة جدولة أو إلغاء موعد. ما اسمك الكامل؟",
+    askPhone: "شكراً لك. يرجى تزويدي برقم هاتفك للتواصل معك بخصوص موعدك.",
+    invalidPhone: "يرجى إدخال رقم هاتف صحيح، ويفضل أن يتضمن رمز الدولة. مثال: +966500001234.",
     greet: (name: string) => `شكراً ${name}. كيف يمكنني مساعدتك اليوم: حجز أم إعادة جدولة أم إلغاء؟`,
     askDoctor: "من فضلك اذكر اسم الطبيب أو القسم. ويمكنك قول: اعرض قائمة الأطباء.",
+    chooseDoctor: "يرجى اختيار طبيب بالاسم، أو إخباري بالقسم الذي تفضله.",
+    doctorListSpeech: (count: number) => `تم العثور على ${count} أطباء. يرجى اختيار طبيب من القائمة.`,
     askDateTime: "من فضلك اذكر التاريخ والوقت المناسبين. مثال: غداً 10:00 صباحاً.",
     askConfirm: (doctor: string, dt: Date, visitType: VisitType) => `وجدت موعد ${visitType.replace("_", " ")} متاحاً يوم ${formatDate(dt)} الساعة ${formatTime(dt)} مع ${doctor}. هل ترغب بتأكيد هذا الموعد؟`,
     booked: "شكراً لك. تم تأكيد موعدك بنجاح. شكراً لاختيارك عيادتنا.",
+    bookedSpeech: "تم حجز الموعد بنجاح. التفاصيل ظاهرة في المحادثة.",
     thanksReply: "على الرحب والسعة. إذا رغبت بالحجز أو إعادة الجدولة أو الإلغاء، أخبرني وسأساعدك مباشرة.",
     clarification: "أريد التأكد من فهمي بشكل صحيح. هل ترغب في الحجز أم إعادة الجدولة أم الإلغاء؟",
     fallback: "عذراً، لم أفهم طلبك بالكامل. يمكنني المساعدة في الحجز أو إعادة الجدولة أو الإلغاء.",
@@ -124,6 +201,7 @@ const phrases = {
     askAppointmentCode: "يرجى تزويدي برمز الموعد للمتابعة.",
     cancelled: "شكراً لك. تم إلغاء الموعد بنجاح.",
     rescheduled: "شكراً لك. تم إعادة جدولة الموعد بنجاح.",
+    rescheduledSpeech: "تمت إعادة جدولة الموعد بنجاح. التفاصيل ظاهرة في المحادثة.",
     confirmCancel: "هل أنت متأكد أنك تريد إلغاء هذا الموعد؟",
     goodbye: "شكراً لزيارتك. نتمنى لك دوام الصحة.",
   },
@@ -139,6 +217,14 @@ function extractName(input: string): string {
   return trimmed;
 }
 
+function normalizePhone(input: string): string | null {
+  const cleaned = input.trim().replace(/[^\d+]/g, "");
+  const plus = cleaned.startsWith("+") ? "+" : "";
+  const digits = cleaned.replace(/\D/g, "");
+  if (digits.length < 7 || digits.length > 15) return null;
+  return `${plus}${digits}`;
+}
+
 function detectIntent(text: string): { intent: Intent; confidence: number } {
   const t = text.toLowerCase();
   const has = (arr: string[]) => arr.some((k) => t.includes(k));
@@ -146,6 +232,27 @@ function detectIntent(text: string): { intent: Intent; confidence: number } {
   if (has(["reschedule", "change", "move", "إعادة", "تغيير"])) return { intent: "reschedule", confidence: 0.84 };
   if (has(["cancel", "إلغاء"])) return { intent: "cancel", confidence: 0.82 };
   return { intent: "unknown", confidence: 0.2 };
+}
+
+function isDoctorListRequest(text: string) {
+  const t = text.toLowerCase();
+  return [
+    "doctor list",
+    "doctors list",
+    "available doctors",
+    "show doctor",
+    "show doctors",
+    "show me doctor",
+    "show me doctors",
+    "list doctor",
+    "list doctors",
+    "see doctor",
+    "see doctors",
+    "قائمة",
+    "الأطباء",
+    "الاطباء",
+    "اعرض",
+  ].some((k) => t.includes(k));
 }
 
 function isThanks(text: string) {
@@ -270,7 +377,7 @@ function mkNewSession(lang: Lang): ConversationSession {
     stage: "ask_name",
     patient: null,
     verified: false,
-    draft: { intent: "unknown", doctor: null, start: null, pendingStart: null, appointmentCode: null, visitType: "in_person" },
+    draft: { intent: "unknown", doctor: null, start: null, pendingStart: null, appointmentCode: null, visitType: "in_person", patientName: null },
     summary: "",
   };
 }
@@ -294,6 +401,7 @@ function normalizeSession(value: unknown): ConversationSession | null {
       pendingStart: toDate(draft.pendingStart),
       appointmentCode: draft.appointmentCode ?? null,
       visitType: draft.visitType ?? "in_person",
+      patientName: draft.patientName ?? null,
     },
     summary: typeof session.summary === "string" ? session.summary : "",
   };
@@ -313,6 +421,8 @@ function appointmentStatusLabel(session: ConversationSession): string {
   if (session.stage === "completed" && session.draft.intent === "cancel") return "Cancelled";
   if (session.stage === "completed") return "Confirmed";
   if (session.stage === "await_confirmation") return "Pending confirmation";
+  if (session.summary === "confirmed_coming") return "Confirmed coming";
+  if (session.summary === "rescheduled") return "Rescheduled";
   return "In progress";
 }
 
@@ -327,10 +437,19 @@ function App() {
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
   const [voiceMode, setVoiceMode] = useState("idle");
+  const [voiceInputProvider, setVoiceInputProvider] = useState<VoiceInputProvider>("gemini");
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [pickerDate, setPickerDate] = useState(() => toDateInputValue(new Date()));
   const [pickerTime, setPickerTime] = useState("09:00");
+  const playbackRef = useRef<HTMLAudioElement | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const voiceReplyPendingRef = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const pcmChunksRef = useRef<Int16Array[]>([]);
 
   useEffect(() => {
     const raw = localStorage.getItem(STORE_KEY);
@@ -356,14 +475,76 @@ function App() {
     if (sessions.length) localStorage.setItem(STORE_KEY, JSON.stringify(sessions));
   }, [sessions]);
 
+  useEffect(() => {
+    return () => {
+      playbackRef.current?.pause();
+      if (playbackRef.current?.src) URL.revokeObjectURL(playbackRef.current.src);
+      recognitionRef.current?.abort();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      void audioContextRef.current?.close();
+    };
+  }, []);
+
   const active = sessions.find((s) => s.id === activeId) || sessions[0];
 
   const updateActive = (mutator: (s: ConversationSession) => ConversationSession) => {
     setSessions((prev) => prev.map((s) => (s.id === activeId ? mutator(s) : s)));
   };
 
-  const addMsg = (role: Role, text: string, voice = false) => {
-    updateActive((s) => ({ ...s, messages: [...s.messages, { id: crypto.randomUUID(), role, text, time: now(), voice }] }));
+  const addMsg = (role: Role, text: string, voice = false, speechText?: string) => {
+    const message: ChatMessage = { id: crypto.randomUUID(), role, text, speechText, time: now(), voice };
+    let appended = false;
+    updateActive((s) => {
+      const last = s.messages[s.messages.length - 1];
+      if (last?.role === role && last.text === text) return s;
+      appended = true;
+      return { ...s, messages: [...s.messages, message] };
+    });
+    if (role === "assistant" && voiceReplyPendingRef.current) {
+      voiceReplyPendingRef.current = false;
+      if (appended) window.setTimeout(() => void playAssistantMessage(message), 100);
+    }
+    return message;
+  };
+
+  const playAssistantMessage = async (message: ChatMessage) => {
+    if (playingMessageId === message.id) {
+      playbackRef.current?.pause();
+      setPlayingMessageId(null);
+      return;
+    }
+
+    try {
+      playbackRef.current?.pause();
+      if (playbackRef.current?.src) URL.revokeObjectURL(playbackRef.current.src);
+
+      setPlayingMessageId(message.id);
+      const res = await fetch(`${API_BASE}/api/v1/realtime/speech`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: message.speechText || message.text }),
+      });
+      if (!res.ok) {
+        let detail = "Gemini voice playback is unavailable right now.";
+        try {
+          const errorBody = await res.json();
+          detail = typeof errorBody?.detail === "string" ? errorBody.detail : detail;
+        } catch {
+          // Keep the friendly fallback when the server does not return JSON.
+        }
+        throw new Error(detail);
+      }
+
+      const audioUrl = URL.createObjectURL(await res.blob());
+      const audio = new Audio(audioUrl);
+      playbackRef.current = audio;
+      audio.onended = () => setPlayingMessageId(null);
+      audio.onerror = () => setPlayingMessageId(null);
+      await audio.play();
+    } catch (error) {
+      setPlayingMessageId(null);
+      addMsg("system", error instanceof Error ? error.message : "Gemini voice playback is unavailable right now.");
+    }
   };
 
   const grouped = useMemo(() => {
@@ -390,12 +571,12 @@ function App() {
     }
   };
 
-  const identifyPatient = async (nameRaw: string) => {
+  const identifyPatient = async (nameRaw: string, phone: string) => {
     const name = extractName(nameRaw);
     const res = await fetch(`${API_BASE}/api/v1/patients/identify-or-create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ full_name: name, preferred_language: lang }),
+      body: JSON.stringify({ full_name: name, preferred_language: lang, phone }),
     });
     const data = await res.json();
     updateActive((s) => ({ ...s, patient: data.patient, verified: true, title: `${data.patient.first_name} ${data.patient.last_name}` }));
@@ -506,7 +687,7 @@ function App() {
       if (res.ok && data?.success) {
         const code = data?.appointment?.appointment_code || null;
         updateActive((s) => ({ ...s, stage: "completed", draft: { ...s.draft, start: scheduledStart, pendingStart: null, appointmentCode: code } }));
-        addMsg("assistant", `${p.booked}\n${doctorAppointmentDetails(active.draft.doctor, scheduledStart, active.draft.visitType, code)}`);
+        addMsg("assistant", `${p.booked}\n${doctorAppointmentDetails(active.draft.doctor, scheduledStart, active.draft.visitType, code)}`, false, p.bookedSpeech);
       } else {
         addMsg("assistant", p.unavailable);
       }
@@ -530,7 +711,7 @@ function App() {
       });
       if (res.ok) {
         updateActive((s) => ({ ...s, stage: "completed", draft: { ...s.draft, start: scheduledStart, pendingStart: null } }));
-        addMsg("assistant", `${p.rescheduled}\n${doctorAppointmentDetails(active.draft.doctor, scheduledStart, active.draft.visitType, active.draft.appointmentCode)}`);
+        addMsg("assistant", `${p.rescheduled}\n${doctorAppointmentDetails(active.draft.doctor, scheduledStart, active.draft.visitType, active.draft.appointmentCode)}`, false, p.rescheduledSpeech);
       } else {
         addMsg("assistant", p.unavailable);
       }
@@ -539,18 +720,20 @@ function App() {
   };
 
   const handleText = async (text: string, voice = false) => {
-    if (!text.trim()) return;
-    addMsg("user", text, voice);
+    const cleanText = voice ? normalizeTranscript(text) : text.trim();
+    if (!cleanText.trim()) return;
+    addMsg("user", cleanText, voice);
+    voiceReplyPendingRef.current = voice;
 
     if (!active) return;
 
-    const codeInMessage = parseAppointmentCode(text);
+    const codeInMessage = parseAppointmentCode(cleanText);
     if (codeInMessage) {
       updateActive((s) => ({ ...s, draft: { ...s.draft, appointmentCode: codeInMessage } }));
       addMsg("assistant", `Appointment code ${codeInMessage} recorded.`);
     }
 
-    const globalIntent = detectIntent(text);
+    const globalIntent = detectIntent(cleanText);
     if (globalIntent.confidence >= 0.55 && globalIntent.intent !== "unknown") {
       updateActive((s) => ({
         ...s,
@@ -567,23 +750,35 @@ function App() {
       }
     }
 
-    if (isThanks(text)) {
+    if (isThanks(cleanText)) {
       addMsg("assistant", p.thanksReply);
-      // Continue to parse intent from same/next user messages naturally.
+      return;
     }
 
-    if (["bye", "goodbye", "exit", "مع السلامة", "خروج"].some((k) => text.toLowerCase().includes(k))) {
+    if (["bye", "goodbye", "exit", "مع السلامة", "خروج"].some((k) => cleanText.toLowerCase().includes(k))) {
       addMsg("assistant", p.goodbye);
       return;
     }
 
     if (active.stage === "ask_name") {
-      await identifyPatient(text);
+      const name = extractName(cleanText);
+      updateActive((s) => ({ ...s, draft: { ...s.draft, patientName: name }, stage: "ask_phone" }));
+      addMsg("assistant", p.askPhone);
+      return;
+    }
+
+    if (active.stage === "ask_phone") {
+      const phone = normalizePhone(cleanText);
+      if (!phone || !active.draft.patientName) {
+        addMsg("assistant", p.invalidPhone);
+        return;
+      }
+      await identifyPatient(active.draft.patientName, phone);
       return;
     }
 
     if (active.stage === "ask_intent") {
-      const intentRes = detectIntent(text);
+      const intentRes = detectIntent(cleanText);
       if (intentRes.confidence < 0.55 || intentRes.intent === "unknown") {
         addMsg("assistant", p.clarification);
         return;
@@ -594,17 +789,16 @@ function App() {
     }
 
     if (active.stage === "ask_doctor") {
-      if (["doctor list", "available doctors", "قائمة", "الأطباء"].some((k) => text.toLowerCase().includes(k))) {
+      if (isDoctorListRequest(cleanText)) {
         const list = doctors.length ? doctors : await fetchDoctors();
         if (list.length) {
-          addMsg("assistant", list.map((d) => `Dr. ${d.first_name} ${d.last_name} (${d.specialty})`).join("\n"));
-          addMsg("assistant", p.askDoctor);
+          addMsg("assistant", `${list.map((d) => `Dr. ${d.first_name} ${d.last_name} (${d.specialty})`).join("\n")}\n\n${p.chooseDoctor}`, false, p.doctorListSpeech(list.length));
         }
         return;
       }
 
       const list = doctors.length ? doctors : await fetchDoctors();
-      const lower = text.toLowerCase();
+      const lower = cleanText.toLowerCase();
       const doctor = list.find((d) => {
         const full = `${d.first_name} ${d.last_name}`.toLowerCase();
         return lower.includes(full) || lower.includes(d.specialty.toLowerCase());
@@ -620,7 +814,7 @@ function App() {
     }
 
     if (active.stage === "ask_datetime") {
-      const dt = parseDateTime(text);
+      const dt = parseDateTime(cleanText);
       if (!dt) {
         addMsg("assistant", p.invalidDate);
         return;
@@ -630,21 +824,21 @@ function App() {
     }
 
     if (active.stage === "await_confirmation") {
-      if (isReject(text)) {
+      if (isReject(cleanText)) {
         updateActive((s) => ({ ...s, stage: s.draft.intent === "cancel" ? "completed" : "ask_datetime", draft: { ...s.draft, pendingStart: null } }));
         addMsg("assistant", active.draft.intent === "cancel" ? "No problem. I kept the appointment as is." : p.askDateTime);
         return;
       }
-      if (!isConfirm(text)) {
+      if (!isConfirm(cleanText)) {
         addMsg("assistant", p.clarification);
         return;
       }
-      await runAppointmentAction(true, text);
+      await runAppointmentAction(true, cleanText);
       return;
     }
 
     if (active.stage === "completed") {
-      const i = detectIntent(text);
+      const i = detectIntent(cleanText);
       if (i.intent === "unknown") {
         addMsg("assistant", p.thanksReply);
         return;
@@ -657,39 +851,125 @@ function App() {
     addMsg("assistant", p.fallback);
   };
 
-  const startVoice = async () => {
-    setVoiceMode("connecting");
+  const stopVoiceRecording = async () => {
+    processorRef.current?.disconnect();
+    sourceRef.current?.disconnect();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    await audioContextRef.current?.close();
+    processorRef.current = null;
+    sourceRef.current = null;
+    streamRef.current = null;
+    audioContextRef.current = null;
+    setListening(false);
+    setVoiceMode("transcribing");
+
+    const audioBase64 = pcmChunksToBase64(pcmChunksRef.current);
+    pcmChunksRef.current = [];
+    if (!audioBase64) {
+      setVoiceMode("idle");
+      return;
+    }
+
     try {
-      const res = await fetch(`${API_BASE}/api/v1/realtime/session`, {
+      const res = await fetch(`${API_BASE}/api/v1/realtime/transcribe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: active?.patient?.patient_code ?? "visitor" }),
+        body: JSON.stringify({ audio_base64: audioBase64, mime_type: "audio/pcm;rate=16000" }),
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => null);
+        throw new Error(typeof errorBody?.detail === "string" ? errorBody.detail : "Gemini voice transcription failed.");
+      }
+      const data = await res.json();
+      const transcript = typeof data?.transcript === "string" ? data.transcript.trim() : "";
       setVoiceMode("ready");
-
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) {
-        addMsg("system", "Voice recognition is not supported in this browser. Please use Chrome or Edge.");
+      if (transcript) await handleText(transcript, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gemini voice transcription failed.";
+      setVoiceMode("error");
+      if (isQuotaError(message)) {
+        setVoiceInputProvider("browser");
+        addMsg("system", "Gemini transcription quota is exhausted. I switched voice input to browser speech recognition. Please click Start Voice again.");
         return;
       }
-      const rec = new SR();
-      rec.lang = lang === "ar" ? "ar-SA" : "en-US";
-      rec.interimResults = true;
-      rec.maxAlternatives = 1;
-      rec.onstart = () => setListening(true);
-      rec.onend = () => setListening(false);
-      rec.onerror = () => setListening(false);
-      rec.onresult = async (e: SpeechRecognitionEvent) => {
-        const r = e.results[e.results.length - 1];
-        const txt = r[0].transcript.trim();
-        if (r.isFinal && txt) await handleText(txt, true);
-      };
-      recognitionRef.current = rec;
-      rec.start();
-    } catch {
+      addMsg("system", message);
+    }
+  };
+
+  const startBrowserSpeechRecognition = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      addMsg("system", "Gemini transcription quota is exhausted, and browser speech recognition is not supported here. Please type your message.");
       setVoiceMode("error");
-      addMsg("assistant", p.fallback);
+      return;
+    }
+
+    const rec = new SR();
+    rec.lang = lang === "ar" ? "ar-SA" : "en-US";
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    rec.onstart = () => {
+      setListening(true);
+      setVoiceMode("browser-stt");
+    };
+    rec.onend = () => {
+      setListening(false);
+      setVoiceMode("idle");
+    };
+    rec.onerror = () => {
+      setListening(false);
+      setVoiceMode("error");
+    };
+    rec.onresult = async (e: SpeechRecognitionEvent) => {
+      const r = e.results[e.results.length - 1];
+      const txt = r[0].transcript.trim();
+      if (r.isFinal && txt) {
+        rec.stop();
+        await handleText(txt, true);
+      }
+    };
+    recognitionRef.current = rec;
+    rec.start();
+  };
+
+  const startVoice = async () => {
+    if (listening) {
+      if (voiceInputProvider === "browser") {
+        recognitionRef.current?.stop();
+        return;
+      }
+      await stopVoiceRecording();
+      return;
+    }
+
+    if (voiceInputProvider === "browser") {
+      startBrowserSpeechRecognition();
+      return;
+    }
+
+    setVoiceMode("connecting");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContextCtor();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      pcmChunksRef.current = [];
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        pcmChunksRef.current.push(downsampleTo16Khz(input, audioContext.sampleRate));
+      };
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      streamRef.current = stream;
+      audioContextRef.current = audioContext;
+      sourceRef.current = source;
+      processorRef.current = processor;
+      setVoiceMode("ready");
+      setListening(true);
+    } catch (error) {
+      setVoiceMode("error");
+      addMsg("system", error instanceof Error ? error.message : "Microphone access is unavailable.");
     }
   };
 
@@ -746,9 +1026,9 @@ function App() {
       </aside>
 
       <main className="chat-main panel">
-        <header className="chat-header"><div><h2>MediAssist AI</h2><span className="online">Online</span></div><div className="header-tools"><span>Language: {lang.toUpperCase()}</span><span>Voice mode: {voiceMode}</span><button className="lang-btn" onClick={() => setLang(lang === "en" ? "ar" : "en")}>{lang === "en" ? "العربية" : "English"}</button></div></header>
+        <header className="chat-header"><div><h2>MediAssist AI</h2><span className="online">Online</span></div><div className="header-tools"><span>Language: {lang.toUpperCase()}</span><span>Voice mode: {voiceMode}</span><span>Input: {voiceInputProvider === "gemini" ? "Gemini" : "Browser"}</span><span>Gemini voice</span><button className="lang-btn" onClick={() => setLang(lang === "en" ? "ar" : "en")}>{lang === "en" ? "العربية" : "English"}</button></div></header>
         <section className="chat-area">
-          {active.messages.map((m) => (<div key={m.id} className={`bubble ${m.role}`}><div className="meta">{m.role} - {m.time} {m.voice ? "(voice)" : ""}</div><div>{m.text}</div></div>))}
+          {active.messages.map((m) => (<div key={m.id} className={`bubble ${m.role}`}><div className="bubble-head"><div className="meta">{m.role} - {m.time} {m.voice ? "(voice transcript)" : ""}</div>{m.role === "assistant" && (<button className="play-reply-btn" onClick={() => void playAssistantMessage(m)} title="Play Gemini Live assistant reply" aria-label="Play Gemini Live assistant reply">{playingMessageId === m.id ? "Stop" : "Play"}</button>)}</div><div className="message-text">{m.text}</div></div>))}
           {active.stage === "ask_datetime" && active.draft.doctor && (
             <DateTimePicker
               date={pickerDate}
@@ -759,11 +1039,11 @@ function App() {
             />
           )}
         </section>
-        <footer className="chat-input-bar"><button className={`mic-btn ${listening ? "pulse" : ""}`} onClick={startVoice}>{listening ? (lang === "ar" ? "جاري الاستماع..." : "Listening...") : (lang === "ar" ? "ابدأ الصوت" : "Start Voice")}</button><input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void onSend(); } }} placeholder={active.patient ? (lang === "ar" ? "اكتب رسالتك" : "Type your message") : (lang === "ar" ? "اكتب اسمك للبدء" : "Type your name to start")} /><button onClick={onSend}>Send</button></footer>
+        <footer className="chat-input-bar"><button className={`mic-btn ${listening ? "pulse" : ""}`} onClick={startVoice}>{listening ? (lang === "ar" ? "إيقاف التسجيل" : "Stop Recording") : (lang === "ar" ? "ابدأ الصوت" : "Start Voice")}</button><input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void onSend(); } }} placeholder={active.patient ? (lang === "ar" ? "اكتب رسالتك" : "Type your message") : (lang === "ar" ? "اكتب اسمك للبدء" : "Type your name to start")} /><button onClick={onSend}>Send</button></footer>
       </main>
 
       <aside className="right-panel panel">
-        <section><h3>Patient Information</h3><ul className="facts"><li>Patient ID: <strong>{active.patient?.patient_code || "-"}</strong></li><li>Name: <strong>{active.patient ? `${active.patient.first_name} ${active.patient.last_name}` : "-"}</strong></li><li>Preferred Language: <strong>{lang.toUpperCase()}</strong></li><li>Status: <strong className={active.verified ? "ok" : "warn"}>{active.verified ? "Verified" : "Pending"}</strong></li></ul></section>
+        <section><h3>Patient Information</h3><ul className="facts"><li>Patient ID: <strong>{active.patient?.patient_code || "-"}</strong></li><li>Name: <strong>{active.patient ? `${active.patient.first_name} ${active.patient.last_name}` : "-"}</strong></li><li>Phone: <strong>{active.patient?.phone || "-"}</strong></li><li>Preferred Language: <strong>{lang.toUpperCase()}</strong></li><li>Status: <strong className={active.verified ? "ok" : "warn"}>{active.verified ? "Verified" : "Pending"}</strong></li></ul></section>
         <section><h3>Appointment Summary</h3><div className="confirm-card"><p><strong>Patient Name:</strong> {active.patient ? `${active.patient.first_name} ${active.patient.last_name}` : "-"}</p><p><strong>Doctor:</strong> {active.draft.doctor ? `Dr. ${active.draft.doctor.first_name} ${active.draft.doctor.last_name}` : "-"}</p><p><strong>Date:</strong> {active.draft.start ? formatDate(active.draft.start) : "-"}</p><p><strong>Time:</strong> {active.draft.start ? formatTime(active.draft.start) : "-"}</p><p><strong>Appointment type:</strong> {active.draft.visitType.replace("_", " ")}</p><p><strong>Code:</strong> {active.draft.appointmentCode || "-"}</p><p><strong>Status:</strong> {appointmentStatusLabel(active)}</p>{active.stage === "completed" && active.draft.appointmentCode && active.draft.intent !== "cancel" && (<div className="summary-actions"><button onClick={startReschedule}>Reschedule</button><button className="danger-btn" onClick={startCancel}>Cancel Appointment</button></div>)}</div></section>
         {active.stage === "ask_datetime" && active.draft.doctor && (
           <section><h3>Pick Date & Time</h3><DateTimePicker date={pickerDate} time={pickerTime} onDate={setPickerDate} onTime={setPickerTime} onSubmit={submitPickerValue} compact /></section>

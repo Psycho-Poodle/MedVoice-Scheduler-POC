@@ -22,6 +22,30 @@ services:
         value: "alloy"
       - key: OPENAI_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_LIVE_MODEL
+        value: "gemini-3.1-flash-live-preview"
+      - key: GEMINI_TTS_MODEL
+        value: "gemini-2.5-flash-preview-tts"
+      - key: GEMINI_TRANSCRIPTION_MODEL
+        value: "gemini-2.5-flash-lite"
+      - key: GEMINI_LIVE_VOICE
+        value: "Kore"
+      - key: VAPI_API_KEY
+        sync: false
+      - key: VAPI_ASSISTANT_ID
+        sync: false
+      - key: VAPI_PHONE_NUMBER_ID
+        sync: false
+      - key: VAPI_BASE_URL
+        value: "https://api.vapi.ai"
+      - key: VAPI_REMINDER_ENABLED
+        value: "false"
+      - key: VAPI_REMINDER_INTERVAL_SECONDS
+        value: "7200"
+      - key: VAPI_REMINDER_STARTUP_DELAY_SECONDS
+        value: "30"
   - type: web
     name: medvoice-scheduler-mcp-server
     runtime: docker
@@ -36,6 +60,8 @@ services:
           name: medvoice-scheduler-db
           property: connectionString
       - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
         sync: false
   - type: web
     name: medvoice-scheduler-frontend
