@@ -137,6 +137,22 @@ function isQuotaError(message: string) {
   return lower.includes("429") || lower.includes("quota") || lower.includes("resource_exhausted");
 }
 
+function describeError(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const message = record.message || record.error || record.detail || record.reason;
+    if (typeof message === "string" && message.trim()) return message;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
 function normalizeTranscript(text: string): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const parts = compact
@@ -532,8 +548,7 @@ function App() {
     });
     client.on("error", (error: unknown) => {
       setCallStatus("error");
-      const message = error instanceof Error ? error.message : "Vapi call failed.";
-      addMsg("system", message);
+      addMsg("system", `Vapi call failed: ${describeError(error, "Unknown Vapi SDK error.")}`);
     });
     vapiRef.current = client;
     return client;
@@ -553,16 +568,10 @@ function App() {
 
     try {
       setCallStatus("connecting");
-      await client.start(VAPI_ASSISTANT_ID, {
-        metadata: {
-          language: lang,
-          patientId: active?.patient?.id,
-          patientPhone: active?.patient?.phone,
-        },
-      });
+      await client.start(VAPI_ASSISTANT_ID);
     } catch (error) {
       setCallStatus("error");
-      addMsg("system", error instanceof Error ? error.message : "Unable to start the Vapi call.");
+      addMsg("system", `Unable to start the Vapi call: ${describeError(error, "Unknown Vapi SDK error.")}`);
     }
   };
 
