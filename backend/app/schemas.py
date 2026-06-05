@@ -12,7 +12,6 @@ class AppointmentStatus(str, Enum):
     confirmed = "confirmed"
     confirmed_coming = "confirmed_coming"
     rescheduled = "rescheduled"
-    reminder_called = "reminder_called"
     completed = "completed"
     cancelled = "cancelled"
     no_show = "no_show"
@@ -55,6 +54,17 @@ class PatientIdentifyRequest(BaseModel):
 class PatientIdentifyResponse(BaseModel):
     created: bool
     patient: PatientResponse
+
+
+class PatientPhoneLookupRequest(BaseModel):
+    phone: str
+
+
+class PatientPhoneLookupResponse(BaseModel):
+    found: bool
+    patient: dict[str, Any] | None = None
+    active_appointments: list[dict[str, Any]] = Field(default_factory=list)
+    message: str
 
 
 class DoctorSearchRequest(BaseModel):
@@ -164,27 +174,6 @@ class VoiceTranscriptionRequest(BaseModel):
 
 class VoiceTranscriptionResponse(BaseModel):
     transcript: str
-
-
-class ConfirmComingRequest(BaseModel):
-    appointment_code: str
-
-
-class VapiRescheduleRequest(BaseModel):
-    appointment_code: str
-    scheduled_start: datetime
-    scheduled_end: datetime
-
-
-class VapiCancelRequest(BaseModel):
-    appointment_code: str
-
-
-class VapiReminderRunResponse(BaseModel):
-    attempted: int
-    started: int
-    errors: list[str] = Field(default_factory=list)
-    calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class VapiToolResponse(BaseModel):

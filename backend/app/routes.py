@@ -1,6 +1,7 @@
 ﻿"""FastAPI routes for scheduling services."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
+import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -17,11 +18,12 @@ from app.schemas import (
     BookAppointmentResponse,
     CancelAppointmentRequest,
     CancelAppointmentResponse,
-    ConfirmComingRequest,
     DoctorResponse,
     DoctorSearchRequest,
     PatientIdentifyRequest,
     PatientIdentifyResponse,
+    PatientPhoneLookupRequest,
+    PatientPhoneLookupResponse,
     PatientVerificationRequest,
     PatientVerificationResponse,
     RealtimeSessionRequest,
@@ -30,9 +32,6 @@ from app.schemas import (
     RescheduleAppointmentResponse,
     RunAppointmentWorkflowRequest,
     RunAppointmentWorkflowResponse,
-    VapiCancelRequest,
-    VapiReminderRunResponse,
-    VapiRescheduleRequest,
     VapiToolResponse,
     VoiceTranscriptionRequest,
     VoiceTranscriptionResponse,
@@ -41,98 +40,107 @@ from app.services import (
     book_appointment,
     cancel_appointment,
     check_appointment_availability,
-    confirm_appointment_coming,
     identify_or_create_patient,
-    list_vapi_due_reminders,
-    mark_vapi_call_started,
+    lookup_patient_by_phone,
     reschedule_appointment,
     search_doctors,
-    vapi_reschedule_appointment,
     verify_patient,
 )
-from app.vapi import VapiAPIError, VapiConfigError, create_outbound_call
 from app.workflow_runner import run_appointment_workflow
 
 router = APIRouter(tags=["scheduler"])
 
 
-def _extract_vapi_tool_args(payload: dict) -> tuple[str | None, dict]:
+def _extract_vapi_tool_calls(payload: dict) -> list[dict]:
     message = payload.get("message") if isinstance(payload, dict) else None
     if isinstance(message, dict):
-        tool_call_list = message.get("toolCallList") or []
-        if tool_call_list:
-            tool_call = tool_call_list[0]
-            return tool_call.get("name"), tool_call.get("parameters") or {}
+        if isinstance(message.get("toolCallList"), list):
+            return [
+                {"id": item.get("id"), "name": item.get("name"), "arguments": item.get("parameters") or {}}
+                for item in message["toolCallList"]
+            ]
+        if isinstance(message.get("toolCalls"), list):
+            return message["toolCalls"]
+        if isinstance(message.get("tool_calls"), list):
+            return message["tool_calls"]
+    if isinstance(payload.get("toolCalls"), list):
+        return payload["toolCalls"]
+    if isinstance(payload.get("tool_calls"), list):
+        return payload["tool_calls"]
+    return []
 
-    tool_calls = []
-    if isinstance(message, dict):
-        tool_calls = message.get("toolCalls") or message.get("tool_calls") or []
-    if not tool_calls and isinstance(payload, dict):
-        tool_calls = payload.get("toolCalls") or payload.get("tool_calls") or []
-    if not tool_calls:
-        return None, {}
 
-    tool_call = tool_calls[0]
+def _normalize_tool_call(tool_call: dict) -> tuple[str | None, str | None, dict]:
     function = tool_call.get("function") or {}
     name = function.get("name") or tool_call.get("name")
-    args = function.get("arguments") or tool_call.get("arguments") or {}
+    tool_call_id = tool_call.get("id")
+    args = function.get("arguments") or tool_call.get("arguments") or tool_call.get("parameters") or {}
     if isinstance(args, str):
-        import json
-
         try:
             args = json.loads(args)
         except json.JSONDecodeError:
             args = {}
-    return name, args if isinstance(args, dict) else {}
+    return tool_call_id, name, args if isinstance(args, dict) else {}
 
 
-def _extract_vapi_tool_call_id(payload: dict) -> str | None:
-    message = payload.get("message") if isinstance(payload, dict) else None
-    if isinstance(message, dict):
-        tool_call_list = message.get("toolCallList") or []
-        if tool_call_list:
-            return tool_call_list[0].get("id")
-        tool_with_list = message.get("toolWithToolCallList") or []
-        if tool_with_list:
-            return (tool_with_list[0].get("toolCall") or {}).get("id")
-    tool_calls = payload.get("toolCalls") or payload.get("tool_calls") or []
-    if tool_calls:
-        return tool_calls[0].get("id")
-    return None
-
-
-def _parse_vapi_datetime(value: str | datetime | None) -> datetime:
+def _parse_tool_datetime(value: str | datetime | None, *, field_name: str) -> datetime:
     if isinstance(value, datetime):
         return value
     if not value:
-        raise HTTPException(status_code=400, detail="scheduled_start is required")
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
-async def run_vapi_due_reminders(db: Session, *, limit: int = 20) -> dict:
-    due = list_vapi_due_reminders(db, limit=limit)
-    result = {"attempted": len(due), "started": 0, "errors": [], "calls": []}
-    for item in due:
-        appt = item["appointment"]
-        patient = item["patient"]
-        doctor = item["doctor"]
-        patient_name = f"{patient['first_name']} {patient['last_name']}"
-        doctor_name = f"Dr. {doctor['first_name']} {doctor['last_name']}"
+def _run_vapi_tool(db: Session, tool_name: str | None, args: dict) -> dict:
+    if tool_name == "lookup_patient_by_phone":
+        return lookup_patient_by_phone(db, phone=str(args.get("phone", "")))
+    if tool_name == "identify_or_create_patient":
         try:
-            call = await create_outbound_call(
-                phone_number=patient["phone"],
-                appointment_code=appt["appointment_code"],
-                patient_name=patient_name,
-                doctor_name=doctor_name,
-                scheduled_start=appt["scheduled_start"].isoformat(),
+            return identify_or_create_patient(
+                db,
+                full_name=str(args.get("full_name", "")),
+                preferred_language=args.get("preferred_language") or "en",
+                phone=args.get("phone"),
+                email=args.get("email"),
             )
-            call_id = call.get("id") if isinstance(call, dict) else None
-            mark_vapi_call_started(db, appointment_code=appt["appointment_code"], vapi_call_id=call_id)
-            result["started"] += 1
-            result["calls"].append({"appointment_code": appt["appointment_code"], "call_id": call_id})
-        except (VapiAPIError, VapiConfigError, Exception) as exc:
-            result["errors"].append(f"{appt['appointment_code']}: {exc}")
-    return result
+        except ValueError as exc:
+            return {"created": False, "patient": None, "message": str(exc)}
+    if tool_name == "search_doctors":
+        return {"doctors": search_doctors(db, query=args.get("query"), department=args.get("department"))}
+    if tool_name == "check_appointment_availability":
+        start = _parse_tool_datetime(args.get("scheduled_start"), field_name="scheduled_start")
+        end = _parse_tool_datetime(args.get("scheduled_end"), field_name="scheduled_end")
+        return check_appointment_availability(db, doctor_id=int(args["doctor_id"]), scheduled_start=start, scheduled_end=end)
+    if tool_name == "book_appointment":
+        start = _parse_tool_datetime(args.get("scheduled_start"), field_name="scheduled_start")
+        end = _parse_tool_datetime(args.get("scheduled_end"), field_name="scheduled_end")
+        return book_appointment(
+            db,
+            patient_id=int(args["patient_id"]),
+            doctor_id=int(args["doctor_id"]),
+            scheduled_start=start,
+            scheduled_end=end,
+            visit_type=args.get("visit_type") or "in_person",
+            reason=args.get("reason") or "Booked by Vapi assistant",
+            confirmation=bool(args.get("confirmation", True)),
+        )
+    if tool_name == "reschedule_appointment":
+        start = _parse_tool_datetime(args.get("scheduled_start"), field_name="scheduled_start")
+        end = _parse_tool_datetime(args.get("scheduled_end"), field_name="scheduled_end")
+        return reschedule_appointment(
+            db,
+            appointment_code=str(args.get("appointment_code", "")),
+            scheduled_start=start,
+            scheduled_end=end,
+            confirmation=bool(args.get("confirmation", True)),
+        )
+    if tool_name == "cancel_appointment":
+        return cancel_appointment(
+            db,
+            appointment_code=str(args.get("appointment_code", "")),
+            confirmation=bool(args.get("confirmation", True)),
+        )
+    raise HTTPException(status_code=400, detail=f"Unsupported Vapi tool: {tool_name}")
 
 
 @router.post("/patients/verify", response_model=PatientVerificationResponse)
@@ -163,6 +171,15 @@ def identify_or_create_patient_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return PatientIdentifyResponse(**result)
+
+
+@router.post("/patients/lookup-by-phone", response_model=PatientPhoneLookupResponse)
+def lookup_patient_by_phone_route(
+    payload: PatientPhoneLookupRequest,
+    db: Session = Depends(get_db),
+) -> PatientPhoneLookupResponse:
+    result = lookup_patient_by_phone(db, phone=payload.phone)
+    return PatientPhoneLookupResponse(**result)
 
 
 @router.post("/doctors/search", response_model=list[DoctorResponse])
@@ -246,114 +263,31 @@ def cancel_appointment_route(
     return CancelAppointmentResponse(**result)
 
 
-@router.get("/vapi/reminders/due")
-def list_vapi_due_reminders_route(
-    limit: int = 20,
-    db: Session = Depends(get_db),
-) -> list[dict]:
-    return list_vapi_due_reminders(db, limit=limit)
-
-
-@router.post("/vapi/reminders/run", response_model=VapiReminderRunResponse)
-async def run_vapi_due_reminders_route(
-    limit: int = 20,
-    db: Session = Depends(get_db),
-) -> VapiReminderRunResponse:
-    result = await run_vapi_due_reminders(db, limit=limit)
-    return VapiReminderRunResponse(**result)
-
-
-@router.post("/vapi/appointments/confirm-coming", response_model=VapiToolResponse)
-def vapi_confirm_coming_route(
-    payload: ConfirmComingRequest,
-    db: Session = Depends(get_db),
-) -> VapiToolResponse:
-    result = confirm_appointment_coming(db, appointment_code=payload.appointment_code)
-    if not result["success"]:
-        raise HTTPException(status_code=404, detail=result["message"])
-    return VapiToolResponse(result=result)
-
-
-@router.post("/vapi/appointments/reschedule", response_model=VapiToolResponse)
-def vapi_reschedule_route(
-    payload: VapiRescheduleRequest,
-    db: Session = Depends(get_db),
-) -> VapiToolResponse:
-    result = vapi_reschedule_appointment(
-        db,
-        appointment_code=payload.appointment_code,
-        scheduled_start=payload.scheduled_start,
-        scheduled_end=payload.scheduled_end,
-    )
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["message"])
-    return VapiToolResponse(result=result)
-
-
-@router.post("/vapi/appointments/cancel", response_model=VapiToolResponse)
-def vapi_cancel_route(
-    payload: VapiCancelRequest,
-    db: Session = Depends(get_db),
-) -> VapiToolResponse:
-    result = cancel_appointment(db, appointment_code=payload.appointment_code, confirmation=True)
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["message"])
-    return VapiToolResponse(result=result)
-
-
 @router.post("/vapi/tools", response_model=VapiToolResponse)
-def vapi_tools_route(payload: dict, db: Session = Depends(get_db)) -> VapiToolResponse:
-    tool_name, args = _extract_vapi_tool_args(payload)
-    if tool_name == "confirm_coming":
-        result = confirm_appointment_coming(db, appointment_code=str(args.get("appointment_code", "")))
-    elif tool_name == "reschedule_appointment":
-        scheduled_start = _parse_vapi_datetime(args.get("scheduled_start"))
-        scheduled_end = _parse_vapi_datetime(args.get("scheduled_end")) if args.get("scheduled_end") else scheduled_start + timedelta(minutes=30)
-        result = vapi_reschedule_appointment(
-            db,
-            appointment_code=str(args.get("appointment_code", "")),
-            scheduled_start=scheduled_start,
-            scheduled_end=scheduled_end,
-        )
-    elif tool_name == "cancel_appointment":
-        result = cancel_appointment(db, appointment_code=str(args.get("appointment_code", "")), confirmation=True)
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported Vapi tool: {tool_name}")
-
-    return VapiToolResponse(result=result)
+def vapi_single_tool_route(payload: dict, db: Session = Depends(get_db)) -> VapiToolResponse:
+    tool_call_id, tool_name, args = _normalize_tool_call(payload)
+    result = _run_vapi_tool(db, tool_name, args)
+    return VapiToolResponse(result={"toolCallId": tool_call_id, "name": tool_name, "data": result})
 
 
 @router.post("/vapi/tool-calls")
 def vapi_tool_calls_route(payload: dict, db: Session = Depends(get_db)) -> dict:
-    tool_name, args = _extract_vapi_tool_args(payload)
-    tool_call_id = _extract_vapi_tool_call_id(payload)
-    if tool_name == "confirm_coming":
-        result = confirm_appointment_coming(db, appointment_code=str(args.get("appointment_code", "")))
-    elif tool_name == "reschedule_appointment":
-        scheduled_start = _parse_vapi_datetime(args.get("scheduled_start"))
-        scheduled_end = _parse_vapi_datetime(args.get("scheduled_end")) if args.get("scheduled_end") else scheduled_start + timedelta(minutes=30)
-        result = vapi_reschedule_appointment(
-            db,
-            appointment_code=str(args.get("appointment_code", "")),
-            scheduled_start=scheduled_start,
-            scheduled_end=scheduled_end,
-        )
-    elif tool_name == "cancel_appointment":
-        result = cancel_appointment(db, appointment_code=str(args.get("appointment_code", "")), confirmation=True)
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported Vapi tool: {tool_name}")
+    tool_calls = _extract_vapi_tool_calls(payload)
+    if not tool_calls:
+        raise HTTPException(status_code=400, detail="No Vapi tool calls found in payload")
 
-    import json
-
-    return {
-        "results": [
+    results = []
+    for tool_call in tool_calls:
+        tool_call_id, tool_name, args = _normalize_tool_call(tool_call)
+        result = _run_vapi_tool(db, tool_name, args)
+        results.append(
             {
                 "toolCallId": tool_call_id,
                 "name": tool_name,
                 "result": json.dumps(result, default=str),
             }
-        ]
-    }
+        )
+    return {"results": results}
 
 
 @router.post("/realtime/session", response_model=RealtimeSessionResponse)

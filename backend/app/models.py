@@ -61,9 +61,6 @@ class Appointment(Base):
     visit_type: Mapped[str] = mapped_column(String(30), default="in_person")
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(50), default="system")
-    reminder_last_called_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    reminder_call_count: Mapped[int] = mapped_column(default=0)
-    vapi_call_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

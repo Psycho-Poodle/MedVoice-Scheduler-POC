@@ -14,13 +14,11 @@
 #     return {"status": "ok"}
 
 import os
-import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.bootstrap import bootstrap_database
-from app.reminders import vapi_reminder_loop
 from app.routes import router
 
 
@@ -58,4 +56,3 @@ def health() -> dict:
 @app.on_event("startup")
 async def startup() -> None:
     bootstrap_database()
-    asyncio.create_task(vapi_reminder_loop())

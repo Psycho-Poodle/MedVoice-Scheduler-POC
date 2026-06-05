@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
+import Vapi from "@vapi-ai/web";
 import "./styles.css";
 
 type Lang = "en" | "ar";
@@ -8,6 +9,7 @@ type Stage = "ask_name" | "ask_phone" | "ask_intent" | "ask_doctor" | "ask_datet
 type Intent = "book" | "reschedule" | "cancel" | "unknown";
 type VisitType = "in_person" | "virtual" | "phone";
 type VoiceInputProvider = "gemini" | "browser";
+type CallStatus = "idle" | "connecting" | "connected" | "ended" | "error";
 
 type ChatMessage = {
   id: string;
@@ -65,6 +67,8 @@ declare global {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const VAPI_PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY ?? "";
+const VAPI_ASSISTANT_ID = import.meta.env.VITE_VAPI_ASSISTANT_ID ?? "";
 const STORE_KEY = "medvoice_sessions_v1";
 
 const now = () => new Date().toLocaleTimeString();
@@ -438,6 +442,7 @@ function App() {
   const [listening, setListening] = useState(false);
   const [voiceMode, setVoiceMode] = useState("idle");
   const [voiceInputProvider, setVoiceInputProvider] = useState<VoiceInputProvider>("gemini");
+  const [callStatus, setCallStatus] = useState<CallStatus>("idle");
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [pickerDate, setPickerDate] = useState(() => toDateInputValue(new Date()));
@@ -450,6 +455,7 @@ function App() {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const pcmChunksRef = useRef<Int16Array[]>([]);
+  const vapiRef = useRef<any>(null);
 
   useEffect(() => {
     const raw = localStorage.getItem(STORE_KEY);
@@ -482,6 +488,7 @@ function App() {
       recognitionRef.current?.abort();
       streamRef.current?.getTracks().forEach((track) => track.stop());
       void audioContextRef.current?.close();
+      vapiRef.current?.stop?.();
     };
   }, []);
 
@@ -505,6 +512,58 @@ function App() {
       if (appended) window.setTimeout(() => void playAssistantMessage(message), 100);
     }
     return message;
+  };
+
+  const getVapiClient = () => {
+    if (!VAPI_PUBLIC_KEY || !VAPI_ASSISTANT_ID) {
+      addMsg("system", "Vapi call is not configured. Set VITE_VAPI_PUBLIC_KEY and VITE_VAPI_ASSISTANT_ID in .env, then restart the frontend.");
+      return null;
+    }
+    if (vapiRef.current) return vapiRef.current;
+
+    const client = new Vapi(VAPI_PUBLIC_KEY);
+    client.on("call-start", () => {
+      setCallStatus("connected");
+      addMsg("system", "Medical center call connected.");
+    });
+    client.on("call-end", () => {
+      setCallStatus("ended");
+      addMsg("system", "Medical center call ended.");
+    });
+    client.on("error", (error: unknown) => {
+      setCallStatus("error");
+      const message = error instanceof Error ? error.message : "Vapi call failed.";
+      addMsg("system", message);
+    });
+    vapiRef.current = client;
+    return client;
+  };
+
+  const toggleMedicalCenterCall = async () => {
+    if (callStatus === "connecting") return;
+    const client = getVapiClient();
+    if (!client) {
+      setCallStatus("error");
+      return;
+    }
+    if (callStatus === "connected") {
+      client.stop();
+      return;
+    }
+
+    try {
+      setCallStatus("connecting");
+      await client.start(VAPI_ASSISTANT_ID, {
+        metadata: {
+          language: lang,
+          patientId: active?.patient?.id,
+          patientPhone: active?.patient?.phone,
+        },
+      });
+    } catch (error) {
+      setCallStatus("error");
+      addMsg("system", error instanceof Error ? error.message : "Unable to start the Vapi call.");
+    }
   };
 
   const playAssistantMessage = async (message: ChatMessage) => {
@@ -1026,7 +1085,7 @@ function App() {
       </aside>
 
       <main className="chat-main panel">
-        <header className="chat-header"><div><h2>MediAssist AI</h2><span className="online">Online</span></div><div className="header-tools"><span>Language: {lang.toUpperCase()}</span><span>Voice mode: {voiceMode}</span><span>Input: {voiceInputProvider === "gemini" ? "Gemini" : "Browser"}</span><span>Gemini voice</span><button className="lang-btn" onClick={() => setLang(lang === "en" ? "ar" : "en")}>{lang === "en" ? "العربية" : "English"}</button></div></header>
+        <header className="chat-header"><div><h2>MediAssist AI</h2><span className="online">Online</span></div><div className="header-tools"><button className={`call-center-btn ${callStatus === "connected" ? "active" : ""}`} onClick={() => void toggleMedicalCenterCall()} disabled={callStatus === "connecting"} title={callStatus === "connected" ? "End medical center call" : "Call medical center"} aria-label={callStatus === "connected" ? "End medical center call" : "Call medical center"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8c1.6 3.1 4.1 5.6 7.2 7.2l2.4-2.4c.3-.3.8-.4 1.2-.3 1.3.4 2.6.6 4 .6.7 0 1.2.5 1.2 1.2v3.8c0 .7-.5 1.2-1.2 1.2C10.7 22.1 2 13.4 2 2.6 2 1.9 2.5 1.4 3.2 1.4H7c.7 0 1.2.5 1.2 1.2 0 1.4.2 2.7.6 4 .1.4 0 .8-.3 1.2l-2.4 2.4Z" /></svg><span>{callStatus === "connected" ? "End call" : callStatus === "connecting" ? "Calling..." : "Call center"}</span></button><span>Language: {lang.toUpperCase()}</span><span>Voice mode: {voiceMode}</span><span>Input: {voiceInputProvider === "gemini" ? "Gemini" : "Browser"}</span><button className="lang-btn" onClick={() => setLang(lang === "en" ? "ar" : "en")}>{lang === "en" ? "العربية" : "English"}</button></div></header>
         <section className="chat-area">
           {active.messages.map((m) => (<div key={m.id} className={`bubble ${m.role}`}><div className="bubble-head"><div className="meta">{m.role} - {m.time} {m.voice ? "(voice transcript)" : ""}</div>{m.role === "assistant" && (<button className="play-reply-btn" onClick={() => void playAssistantMessage(m)} title="Play Gemini Live assistant reply" aria-label="Play Gemini Live assistant reply">{playingMessageId === m.id ? "Stop" : "Play"}</button>)}</div><div className="message-text">{m.text}</div></div>))}
           {active.stage === "ask_datetime" && active.draft.doctor && (

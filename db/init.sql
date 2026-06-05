@@ -45,13 +45,10 @@ CREATE TABLE IF NOT EXISTS appointments (
     visit_type VARCHAR(30) NOT NULL DEFAULT 'in_person',
     reason TEXT,
     created_by VARCHAR(50) DEFAULT 'system',
-    reminder_last_called_at TIMESTAMPTZ,
-    reminder_call_count INTEGER NOT NULL DEFAULT 0,
-    vapi_call_id VARCHAR(120),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (scheduled_end > scheduled_start),
-    CHECK (status IN ('scheduled', 'confirmed', 'confirmed_coming', 'rescheduled', 'reminder_called', 'completed', 'cancelled', 'no_show')),
+    CHECK (status IN ('scheduled', 'confirmed', 'confirmed_coming', 'rescheduled', 'completed', 'cancelled', 'no_show')),
     CHECK (visit_type IN ('in_person', 'telemedicine', 'follow_up'))
 );
 

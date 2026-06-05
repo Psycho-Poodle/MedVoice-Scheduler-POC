@@ -105,6 +105,37 @@ body {
 .header-tools { display: flex; gap: 12px; align-items: center; font-size: 0.82rem; color: #607086; }
 .lang-btn { border: 1px solid var(--line); background: #fff; border-radius: 9px; padding: 8px 10px; }
 
+.call-center-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid #b7e1d8;
+  border-radius: 999px;
+  background: #ecfdf8;
+  color: #0f766e;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 8px 11px;
+}
+
+.call-center-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.call-center-btn.active {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.call-center-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .chat-area {
   overflow: auto;
   padding: 16px;

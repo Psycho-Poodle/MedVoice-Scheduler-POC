@@ -32,24 +32,8 @@ POC monorepo scaffold for a voice-first medical scheduling system.
 - Typed patient messages receive typed assistant replies.
 - Spoken patient messages are recorded after `Start Voice`, sent to Gemini Live for transcription after `Stop Recording`, then the assistant reply is played with Gemini Live voice.
 - Assistant messages can also be replayed with the `Play` button.
-
-## Vapi Reminder Calls
-- Patients are asked for a phone number before booking. It is stored in `patients.phone`.
-- The backend can scan appointments due within 3 hours and start Vapi outbound reminder calls.
-- Vapi calls back into backend tool endpoints to mark patients as coming, reschedule, or cancel.
-
-Required `.env` values:
-- `VAPI_API_KEY`
-- `VAPI_ASSISTANT_ID`
-- `VAPI_PHONE_NUMBER_ID`
-- `VAPI_REMINDER_ENABLED=true` when ready to run automatically every 2 hours.
-
-Useful endpoints:
-- `GET /api/v1/vapi/reminders/due`
-- `POST /api/v1/vapi/reminders/run`
-- `POST /api/v1/vapi/appointments/confirm-coming`
-- `POST /api/v1/vapi/appointments/reschedule`
-- `POST /api/v1/vapi/appointments/cancel`
+- Patients can use the `Call center` button to start a browser call with a Vapi medical center assistant.
+- Vapi setup instructions are in `docs/vapi-call-assistant.md`.
 
 ## Services (Planned)
 - `frontend` -> React app

@@ -3,13 +3,26 @@
 These functions are designed to be easy to unit test by injecting a SQLAlchemy session.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 import uuid
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Appointment, ConversationLog, Doctor, Patient
+
+ACTIVE_APPOINTMENT_STATUSES = ("scheduled", "confirmed", "confirmed_coming", "rescheduled")
+
+
+def normalize_phone_number(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = "".join(ch for ch in value.strip() if ch.isdigit() or ch == "+")
+    prefix = "+" if cleaned.startswith("+") else ""
+    digits = "".join(ch for ch in cleaned if ch.isdigit())
+    if len(digits) < 7 or len(digits) > 15:
+        return None
+    return f"{prefix}{digits}"
 
 
 def identify_or_create_patient(
@@ -113,31 +126,28 @@ def _appointment_to_dict(appt: Appointment) -> dict:
         "status": appt.status,
         "visit_type": appt.visit_type,
         "reason": appt.reason,
-        "reminder_last_called_at": appt.reminder_last_called_at,
-        "reminder_call_count": appt.reminder_call_count,
-        "vapi_call_id": appt.vapi_call_id,
     }
 
 
-def _patient_to_dict(patient: Patient) -> dict:
+def _appointment_detail_to_dict(appt: Appointment, patient: Patient, doctor: Doctor) -> dict:
     return {
-        "id": patient.id,
-        "patient_code": patient.patient_code,
-        "first_name": patient.first_name,
-        "last_name": patient.last_name,
-        "phone": patient.phone,
-        "email": patient.email,
-    }
-
-
-def _doctor_to_dict(doctor: Doctor) -> dict:
-    return {
-        "id": doctor.id,
-        "doctor_code": doctor.doctor_code,
-        "first_name": doctor.first_name,
-        "last_name": doctor.last_name,
-        "specialty": doctor.specialty,
-        "clinic_location": doctor.clinic_location,
+        "appointment": _appointment_to_dict(appt),
+        "patient": {
+            "id": patient.id,
+            "patient_code": patient.patient_code,
+            "first_name": patient.first_name,
+            "last_name": patient.last_name,
+            "phone": patient.phone,
+            "email": patient.email,
+        },
+        "doctor": {
+            "id": doctor.id,
+            "doctor_code": doctor.doctor_code,
+            "first_name": doctor.first_name,
+            "last_name": doctor.last_name,
+            "specialty": doctor.specialty,
+            "clinic_location": doctor.clinic_location,
+        },
     }
 
 
@@ -361,6 +371,52 @@ def reschedule_appointment(
     }
 
 
+def lookup_patient_by_phone(db: Session, *, phone: str) -> dict:
+    normalized_phone = normalize_phone_number(phone)
+    if not normalized_phone:
+        return {
+            "found": False,
+            "patient": None,
+            "active_appointments": [],
+            "message": "A valid phone number is required.",
+        }
+
+    patient = db.execute(select(Patient).where(Patient.phone == normalized_phone)).scalars().first()
+    if patient is None:
+        return {
+            "found": False,
+            "patient": None,
+            "active_appointments": [],
+            "message": "No patient was found with this phone number.",
+        }
+
+    rows = db.execute(
+        select(Appointment, Doctor)
+        .join(Doctor, Appointment.doctor_id == Doctor.id)
+        .where(Appointment.patient_id == patient.id)
+        .where(Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES))
+        .where(Appointment.scheduled_start >= datetime.now(timezone.utc))
+        .order_by(Appointment.scheduled_start.asc())
+    ).all()
+
+    return {
+        "found": True,
+        "patient": {
+            "id": patient.id,
+            "patient_code": patient.patient_code,
+            "first_name": patient.first_name,
+            "last_name": patient.last_name,
+            "phone": patient.phone,
+            "email": patient.email,
+        },
+        "active_appointments": [
+            _appointment_detail_to_dict(appt, patient, doctor)
+            for appt, doctor in rows
+        ],
+        "message": "Patient found." if rows else "Patient found with no active future appointments.",
+    }
+
+
 def cancel_appointment(
     db: Session,
     *,
@@ -404,79 +460,3 @@ def cancel_appointment(
         "appointment": _appointment_to_dict(appt),
         "message": "Appointment cancelled successfully.",
     }
-
-
-def list_vapi_due_reminders(db: Session, *, hours_before: int = 3, limit: int = 20) -> list[dict]:
-    now = datetime.now(timezone.utc)
-    window_end = now + timedelta(hours=hours_before)
-    stmt = (
-        select(Appointment, Patient, Doctor)
-        .join(Patient, Appointment.patient_id == Patient.id)
-        .join(Doctor, Appointment.doctor_id == Doctor.id)
-        .where(Appointment.status.in_(["scheduled", "confirmed", "rescheduled"]))
-        .where(Appointment.scheduled_start >= now)
-        .where(Appointment.scheduled_start <= window_end)
-        .where(Patient.phone.is_not(None))
-        .where(Appointment.reminder_call_count == 0)
-        .order_by(Appointment.scheduled_start.asc())
-        .limit(limit)
-    )
-    rows = db.execute(stmt).all()
-    return [
-        {
-            "appointment": _appointment_to_dict(appt),
-            "patient": _patient_to_dict(patient),
-            "doctor": _doctor_to_dict(doctor),
-        }
-        for appt, patient, doctor in rows
-    ]
-
-
-def mark_vapi_call_started(db: Session, *, appointment_code: str, vapi_call_id: str | None = None) -> dict:
-    appt = db.execute(select(Appointment).where(Appointment.appointment_code == appointment_code)).scalars().first()
-    if appt is None:
-        return {"success": False, "appointment": None, "message": "Appointment not found."}
-
-    appt.reminder_last_called_at = datetime.now(timezone.utc)
-    appt.reminder_call_count = (appt.reminder_call_count or 0) + 1
-    appt.vapi_call_id = vapi_call_id
-    if appt.status in {"scheduled", "confirmed", "rescheduled"}:
-        appt.status = "reminder_called"
-    db.commit()
-    db.refresh(appt)
-    return {"success": True, "appointment": _appointment_to_dict(appt), "message": "Reminder call started."}
-
-
-def confirm_appointment_coming(db: Session, *, appointment_code: str) -> dict:
-    appt = db.execute(select(Appointment).where(Appointment.appointment_code == appointment_code)).scalars().first()
-    if appt is None:
-        return {"success": False, "appointment": None, "message": "Appointment not found."}
-    appt.status = "confirmed_coming"
-    db.commit()
-    db.refresh(appt)
-    return {"success": True, "appointment": _appointment_to_dict(appt), "message": "Appointment marked as confirmed coming."}
-
-
-def vapi_reschedule_appointment(
-    db: Session,
-    *,
-    appointment_code: str,
-    scheduled_start: datetime,
-    scheduled_end: datetime,
-) -> dict:
-    result = reschedule_appointment(
-        db,
-        appointment_code=appointment_code,
-        scheduled_start=scheduled_start,
-        scheduled_end=scheduled_end,
-        confirmation=True,
-    )
-    if result["success"] and result["appointment"]:
-        appt = db.execute(select(Appointment).where(Appointment.appointment_code == appointment_code)).scalars().first()
-        if appt:
-            appt.status = "rescheduled"
-            db.commit()
-            db.refresh(appt)
-            result["appointment"] = _appointment_to_dict(appt)
-            result["message"] = "Appointment rescheduled by reminder call."
-    return result

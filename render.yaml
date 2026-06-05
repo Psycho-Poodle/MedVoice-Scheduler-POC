@@ -32,20 +32,6 @@ services:
         value: "gemini-2.5-flash-lite"
       - key: GEMINI_LIVE_VOICE
         value: "Kore"
-      - key: VAPI_API_KEY
-        sync: false
-      - key: VAPI_ASSISTANT_ID
-        sync: false
-      - key: VAPI_PHONE_NUMBER_ID
-        sync: false
-      - key: VAPI_BASE_URL
-        value: "https://api.vapi.ai"
-      - key: VAPI_REMINDER_ENABLED
-        value: "false"
-      - key: VAPI_REMINDER_INTERVAL_SECONDS
-        value: "7200"
-      - key: VAPI_REMINDER_STARTUP_DELAY_SECONDS
-        value: "30"
   - type: web
     name: medvoice-scheduler-mcp-server
     runtime: docker
@@ -74,6 +60,10 @@ services:
     envVars:
       - key: VITE_API_BASE_URL
         value: "https://medvoice-scheduler-poc-backend.onrender.com"
+      - key: VITE_VAPI_PUBLIC_KEY
+        sync: false
+      - key: VITE_VAPI_ASSISTANT_ID
+        sync: false
 
 databases:
   - name: medvoice-scheduler-db
