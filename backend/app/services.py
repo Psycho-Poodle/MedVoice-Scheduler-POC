@@ -195,9 +195,32 @@ def verify_patient(
 def search_doctors(db: Session, query: str | None = None, department: str | None = None) -> list[dict]:
     """Search doctors by free-text query and/or department(specialty)."""
     stmt = select(Doctor)
+    normalized_query = (query or "").strip()
+    normalized_department = (department or "").strip()
 
-    if query:
-        like_query = f"%{query.lower()}%"
+    specialty_aliases = {
+        "dermatologist": "dermatology",
+        "skin doctor": "dermatology",
+        "skin specialist": "dermatology",
+        "cardiologist": "cardiology",
+        "heart doctor": "cardiology",
+        "heart specialist": "cardiology",
+        "pediatrician": "pediatrics",
+        "child doctor": "pediatrics",
+        "children doctor": "pediatrics",
+    }
+    lookup_text = f"{normalized_query} {normalized_department}".lower()
+    matched_specialty_alias = False
+    for phrase, specialty in specialty_aliases.items():
+        if phrase in lookup_text:
+            normalized_department = specialty
+            matched_specialty_alias = True
+            break
+    if matched_specialty_alias:
+        normalized_query = ""
+
+    if normalized_query:
+        like_query = f"%{normalized_query.lower()}%"
         stmt = stmt.where(
             or_(
                 func.lower(Doctor.first_name).like(like_query),
@@ -207,8 +230,8 @@ def search_doctors(db: Session, query: str | None = None, department: str | None
             )
         )
 
-    if department:
-        stmt = stmt.where(func.lower(Doctor.specialty) == department.lower())
+    if normalized_department:
+        stmt = stmt.where(func.lower(Doctor.specialty) == normalized_department.lower())
 
     doctors = db.execute(stmt.order_by(Doctor.last_name.asc())).scalars().all()
     return [

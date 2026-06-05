@@ -176,10 +176,6 @@ class VoiceTranscriptionResponse(BaseModel):
     transcript: str
 
 
-class VapiToolResponse(BaseModel):
-    result: dict[str, Any]
-
-
 class RunAppointmentWorkflowRequest(BaseModel):
     user_input: str
     extracted_entities: dict[str, Any] = Field(default_factory=dict)

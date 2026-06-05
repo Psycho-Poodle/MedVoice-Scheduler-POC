@@ -32,7 +32,6 @@ from app.schemas import (
     RescheduleAppointmentResponse,
     RunAppointmentWorkflowRequest,
     RunAppointmentWorkflowResponse,
-    VapiToolResponse,
     VoiceTranscriptionRequest,
     VoiceTranscriptionResponse,
 )
@@ -67,13 +66,15 @@ def _extract_vapi_tool_calls(payload: dict) -> list[dict]:
         return payload["toolCalls"]
     if isinstance(payload.get("tool_calls"), list):
         return payload["tool_calls"]
+    if payload.get("name") or payload.get("function"):
+        return [payload]
     return []
 
 
 def _normalize_tool_call(tool_call: dict) -> tuple[str | None, str | None, dict]:
     function = tool_call.get("function") or {}
-    name = function.get("name") or tool_call.get("name")
-    tool_call_id = tool_call.get("id")
+    name = function.get("name") or tool_call.get("name") or tool_call.get("toolName")
+    tool_call_id = tool_call.get("id") or tool_call.get("toolCallId")
     args = function.get("arguments") or tool_call.get("arguments") or tool_call.get("parameters") or {}
     if isinstance(args, str):
         try:
@@ -81,6 +82,30 @@ def _normalize_tool_call(tool_call: dict) -> tuple[str | None, str | None, dict]
         except json.JSONDecodeError:
             args = {}
     return tool_call_id, name, args if isinstance(args, dict) else {}
+
+
+def _canonical_tool_name(tool_name: str | None) -> str | None:
+    if not tool_name:
+        return None
+    normalized = "".join(ch if ch.isalnum() else "_" for ch in tool_name.strip().lower())
+    normalized = "_".join(part for part in normalized.split("_") if part)
+    aliases = {
+        "lookup_patient": "lookup_patient_by_phone",
+        "patient_lookup": "lookup_patient_by_phone",
+        "phone_lookup": "lookup_patient_by_phone",
+        "search_doctor": "search_doctors",
+        "doctor_search": "search_doctors",
+        "search_doctors": "search_doctors",
+        "check_availability": "check_appointment_availability",
+        "availability": "check_appointment_availability",
+        "book": "book_appointment",
+        "book_appointment": "book_appointment",
+        "reschedule": "reschedule_appointment",
+        "reschedule_appointment": "reschedule_appointment",
+        "cancel": "cancel_appointment",
+        "cancel_appointment": "cancel_appointment",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _parse_tool_datetime(value: str | datetime | None, *, field_name: str) -> datetime:
@@ -92,6 +117,7 @@ def _parse_tool_datetime(value: str | datetime | None, *, field_name: str) -> da
 
 
 def _run_vapi_tool(db: Session, tool_name: str | None, args: dict) -> dict:
+    tool_name = _canonical_tool_name(tool_name)
     if tool_name == "lookup_patient_by_phone":
         return lookup_patient_by_phone(db, phone=str(args.get("phone", "")))
     if tool_name == "identify_or_create_patient":
@@ -140,7 +166,16 @@ def _run_vapi_tool(db: Session, tool_name: str | None, args: dict) -> dict:
             appointment_code=str(args.get("appointment_code", "")),
             confirmation=bool(args.get("confirmation", True)),
         )
-    raise HTTPException(status_code=400, detail=f"Unsupported Vapi tool: {tool_name}")
+    raise ValueError(f"Unsupported Vapi tool: {tool_name}")
+
+
+def _vapi_result(tool_call_id: str | None, result: dict | None = None, error: str | None = None) -> dict:
+    item = {"toolCallId": tool_call_id or "unknown"}
+    if error:
+        item["error"] = error.replace("\n", " ")
+    else:
+        item["result"] = json.dumps(result or {}, default=str, ensure_ascii=False).replace("\n", " ")
+    return item
 
 
 @router.post("/patients/verify", response_model=PatientVerificationResponse)
@@ -263,30 +298,30 @@ def cancel_appointment_route(
     return CancelAppointmentResponse(**result)
 
 
-@router.post("/vapi/tools", response_model=VapiToolResponse)
-def vapi_single_tool_route(payload: dict, db: Session = Depends(get_db)) -> VapiToolResponse:
+@router.post("/vapi/tools")
+def vapi_single_tool_route(payload: dict, db: Session = Depends(get_db)) -> dict:
     tool_call_id, tool_name, args = _normalize_tool_call(payload)
-    result = _run_vapi_tool(db, tool_name, args)
-    return VapiToolResponse(result={"toolCallId": tool_call_id, "name": tool_name, "data": result})
+    try:
+        result = _run_vapi_tool(db, tool_name, args)
+        return {"results": [_vapi_result(tool_call_id, result=result)]}
+    except Exception as exc:
+        return {"results": [_vapi_result(tool_call_id, error=str(exc))]}
 
 
 @router.post("/vapi/tool-calls")
 def vapi_tool_calls_route(payload: dict, db: Session = Depends(get_db)) -> dict:
     tool_calls = _extract_vapi_tool_calls(payload)
     if not tool_calls:
-        raise HTTPException(status_code=400, detail="No Vapi tool calls found in payload")
+        return {"results": [_vapi_result(None, error="No Vapi tool calls found in payload")]}
 
     results = []
     for tool_call in tool_calls:
         tool_call_id, tool_name, args = _normalize_tool_call(tool_call)
-        result = _run_vapi_tool(db, tool_name, args)
-        results.append(
-            {
-                "toolCallId": tool_call_id,
-                "name": tool_name,
-                "result": json.dumps(result, default=str),
-            }
-        )
+        try:
+            result = _run_vapi_tool(db, tool_name, args)
+            results.append(_vapi_result(tool_call_id, result=result))
+        except Exception as exc:
+            results.append(_vapi_result(tool_call_id, error=str(exc)))
     return {"results": results}
 
 

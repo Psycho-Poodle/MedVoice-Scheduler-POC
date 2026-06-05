@@ -69,6 +69,21 @@ In Vapi Dashboard:
 4. Use a model with tool/function calling enabled.
 5. Add the tools below and set each tool server URL to:
    `https://YOUR_BACKEND_HOST/api/v1/vapi/tool-calls`
+6. Keep each tool synchronous. Do not enable async mode for these booking tools.
+7. Use the exact snake_case tool names below. Display labels can be friendly, but the tool/function name should remain snake_case.
+
+The backend returns Vapi's required format:
+
+```json
+{
+  "results": [
+    {
+      "toolCallId": "call_123",
+      "result": "single-line JSON string"
+    }
+  ]
+}
+```
 
 ## Tools
 
