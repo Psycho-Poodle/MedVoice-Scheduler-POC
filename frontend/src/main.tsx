@@ -153,6 +153,22 @@ function describeError(error: unknown, fallback: string) {
   return fallback;
 }
 
+function isVapiMeetingEndedError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const record = error as Record<string, unknown>;
+  if (record.type !== "daily-error") return false;
+  const dailyError = record.error as Record<string, unknown> | undefined;
+  const message = dailyError?.message as Record<string, unknown> | undefined;
+  const nested = dailyError?.error as Record<string, unknown> | undefined;
+  return (
+    message?.type === "ejected" ||
+    nested?.type === "ejected" ||
+    dailyError?.errorMsg === "Meeting has ended" ||
+    message?.msg === "Meeting has ended" ||
+    nested?.msg === "Meeting has ended"
+  );
+}
+
 function normalizeTranscript(text: string): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const parts = compact
@@ -472,6 +488,7 @@ function App() {
   const streamRef = useRef<MediaStream | null>(null);
   const pcmChunksRef = useRef<Int16Array[]>([]);
   const vapiRef = useRef<any>(null);
+  const callStatusRef = useRef<CallStatus>("idle");
 
   useEffect(() => {
     const raw = localStorage.getItem(STORE_KEY);
@@ -514,6 +531,11 @@ function App() {
     setSessions((prev) => prev.map((s) => (s.id === activeId ? mutator(s) : s)));
   };
 
+  const updateCallStatus = (status: CallStatus) => {
+    callStatusRef.current = status;
+    setCallStatus(status);
+  };
+
   const addMsg = (role: Role, text: string, voice = false, speechText?: string) => {
     const message: ChatMessage = { id: crypto.randomUUID(), role, text, speechText, time: now(), voice };
     let appended = false;
@@ -539,15 +561,22 @@ function App() {
 
     const client = new Vapi(VAPI_PUBLIC_KEY);
     client.on("call-start", () => {
-      setCallStatus("connected");
+      updateCallStatus("connected");
       addMsg("system", "Medical center call connected.");
     });
     client.on("call-end", () => {
-      setCallStatus("ended");
+      updateCallStatus("ended");
       addMsg("system", "Medical center call ended.");
     });
     client.on("error", (error: unknown) => {
-      setCallStatus("error");
+      if (isVapiMeetingEndedError(error)) {
+        if (callStatusRef.current !== "ended") {
+          updateCallStatus("ended");
+          addMsg("system", "Medical center call ended.");
+        }
+        return;
+      }
+      updateCallStatus("error");
       addMsg("system", `Vapi call failed: ${describeError(error, "Unknown Vapi SDK error.")}`);
     });
     vapiRef.current = client;
@@ -558,7 +587,7 @@ function App() {
     if (callStatus === "connecting") return;
     const client = getVapiClient();
     if (!client) {
-      setCallStatus("error");
+      updateCallStatus("error");
       return;
     }
     if (callStatus === "connected") {
@@ -567,10 +596,10 @@ function App() {
     }
 
     try {
-      setCallStatus("connecting");
+      updateCallStatus("connecting");
       await client.start(VAPI_ASSISTANT_ID);
     } catch (error) {
-      setCallStatus("error");
+      updateCallStatus("error");
       addMsg("system", `Unable to start the Vapi call: ${describeError(error, "Unknown Vapi SDK error.")}`);
     }
   };
