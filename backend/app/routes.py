@@ -132,7 +132,16 @@ def _run_vapi_tool(db: Session, tool_name: str | None, args: dict) -> dict:
         except ValueError as exc:
             return {"created": False, "patient": None, "message": str(exc)}
     if tool_name == "search_doctors":
-        return {"doctors": search_doctors(db, query=args.get("query"), department=args.get("department"))}
+        doctors = search_doctors(db, query=args.get("query"), department=args.get("department"))
+        return {
+            "doctors": doctors,
+            "matched_count": len(doctors),
+            "assistant_directive": (
+                "Use only the doctors returned in doctors. Do not invent doctor names, gender, branches, or extra options. "
+                "If matched_count is 0, say no matching doctor was found and ask for another specialty. "
+                "If matched_count is 1, select that doctor. If more than 1, read at most 3 returned options."
+            ),
+        }
     if tool_name == "check_appointment_availability":
         start = _parse_tool_datetime(args.get("scheduled_start"), field_name="scheduled_start")
         end = _parse_tool_datetime(args.get("scheduled_end"), field_name="scheduled_end")
