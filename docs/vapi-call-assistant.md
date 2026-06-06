@@ -134,6 +134,7 @@ In Vapi Dashboard:
    `https://YOUR_BACKEND_HOST/api/v1/vapi/tool-calls`
 6. Keep each tool synchronous. Do not enable async mode for these booking tools.
 7. Use the exact snake_case tool names below. Display labels can be friendly, but the tool/function name should remain snake_case.
+8. Set each tool `maxTokens` to at least `500`. Low token limits can make Vapi truncate or ignore returned doctor data.
 
 The backend returns Vapi's required format:
 
@@ -278,6 +279,20 @@ Content-Type: application/json
 {
   "phone": "+966566200435"
 }
+```
+
+Check deployed DB data:
+
+```http
+GET https://YOUR_BACKEND_HOST/api/v1/debug/database-summary
+```
+
+Expected seeded doctors:
+
+```text
+Dr. Hassan Al-Salem - Family Medicine
+Dr. Maha Al-Zahrani - Cardiology
+Dr. Rakan Al-Mutairi - Dermatology
 ```
 
 Simulate a Vapi tool call:

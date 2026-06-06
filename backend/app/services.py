@@ -258,6 +258,15 @@ def search_doctors(db: Session, query: str | None = None, department: str | None
     ]
 
 
+def database_summary(db: Session) -> dict:
+    return {
+        "patients": db.execute(select(func.count()).select_from(Patient)).scalar_one(),
+        "doctors": db.execute(select(func.count()).select_from(Doctor)).scalar_one(),
+        "appointments": db.execute(select(func.count()).select_from(Appointment)).scalar_one(),
+        "doctor_list": search_doctors(db),
+    }
+
+
 def check_appointment_availability(db: Session, doctor_id: int, scheduled_start: datetime, scheduled_end: datetime) -> dict:
     """Check if a doctor is free in the requested time window."""
     start = _normalize_dt(scheduled_start)

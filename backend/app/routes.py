@@ -39,6 +39,7 @@ from app.services import (
     book_appointment,
     cancel_appointment,
     check_appointment_availability,
+    database_summary,
     identify_or_create_patient,
     lookup_patient_by_phone,
     reschedule_appointment,
@@ -119,23 +120,61 @@ def _parse_tool_datetime(value: str | datetime | None, *, field_name: str) -> da
 def _run_vapi_tool(db: Session, tool_name: str | None, args: dict) -> dict:
     tool_name = _canonical_tool_name(tool_name)
     if tool_name == "lookup_patient_by_phone":
-        return lookup_patient_by_phone(db, phone=str(args.get("phone", "")))
+        result = lookup_patient_by_phone(db, phone=str(args.get("phone", "")))
+        if result.get("found"):
+            appointments = result.get("active_appointments") or []
+            if appointments:
+                result["assistant_message"] = (
+                    f"Patient found: {result['patient']['first_name']} {result['patient']['last_name']}. "
+                    f"There are {len(appointments)} active future appointment(s). Tell the caller the appointment details and ask whether to reschedule, cancel, or book a new appointment."
+                )
+            else:
+                result["assistant_message"] = (
+                    f"Patient found: {result['patient']['first_name']} {result['patient']['last_name']}. "
+                    "No active future appointments were found. Continue booking."
+                )
+        else:
+            result["assistant_message"] = "No patient was found for this phone number. Ask for the caller's full name and create the patient record."
+        return result
     if tool_name == "identify_or_create_patient":
         try:
-            return identify_or_create_patient(
+            result = identify_or_create_patient(
                 db,
                 full_name=str(args.get("full_name", "")),
                 preferred_language=args.get("preferred_language") or "en",
                 phone=args.get("phone"),
                 email=args.get("email"),
             )
+            patient = result.get("patient") or {}
+            result["assistant_message"] = (
+                f"Patient record is ready: patient_id={patient.get('id')}, "
+                f"name={patient.get('first_name')} {patient.get('last_name')}. Continue by asking for doctor or specialty."
+            )
+            return result
         except ValueError as exc:
-            return {"created": False, "patient": None, "message": str(exc)}
+            return {
+                "created": False,
+                "patient": None,
+                "message": str(exc),
+                "assistant_message": "The patient record was not created. Ask for the missing full name and try again.",
+            }
     if tool_name == "search_doctors":
         doctors = search_doctors(db, query=args.get("query"), department=args.get("department"))
+        if doctors:
+            options = [
+                f"doctor_id={doctor['id']}: Dr. {doctor['first_name']} {doctor['last_name']} ({doctor['specialty']}, {doctor.get('clinic_location') or 'location not listed'})"
+                for doctor in doctors[:3]
+            ]
+            assistant_message = (
+                f"Found {len(doctors)} matching doctor(s): " + "; ".join(options) + ". "
+                "Use only these returned doctors. If there is one match, select it and ask for preferred date and time."
+            )
+        else:
+            assistant_message = "No matching doctors were found in the database. Ask the caller for another specialty or doctor name."
         return {
             "doctors": doctors,
             "matched_count": len(doctors),
+            "assistant_message": assistant_message,
             "assistant_directive": (
                 "Use only the doctors returned in doctors. Do not invent doctor names, gender, branches, or extra options. "
                 "If matched_count is 0, say no matching doctor was found and ask for another specialty. "
@@ -230,6 +269,11 @@ def lookup_patient_by_phone_route(
 def search_doctors_route(payload: DoctorSearchRequest, db: Session = Depends(get_db)) -> list[DoctorResponse]:
     results = search_doctors(db, query=payload.query, department=payload.department)
     return [DoctorResponse(**item) for item in results]
+
+
+@router.get("/debug/database-summary")
+def database_summary_route(db: Session = Depends(get_db)) -> dict:
+    return database_summary(db)
 
 
 @router.post("/appointments/availability", response_model=AvailabilityCheckResponse)
