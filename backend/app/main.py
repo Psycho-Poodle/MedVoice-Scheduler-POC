@@ -23,14 +23,22 @@ from app.routes import router
 
 
 def _parse_cors_origins(value: str | None) -> list[str]:
+    tool_test_origins = [
+        "https://dashboard.vapi.ai",
+        "https://corsproxy.io",
+    ]
     if not value:
         return [
             "http://localhost:5173",
             "https://medvoice-scheduler-poc-1.onrender.com",
+            *tool_test_origins,
         ]
     origin_list = [origin.strip() for origin in value.split(",") if origin.strip()]
     if "*" in origin_list:
         return ["*"]
+    for origin in tool_test_origins:
+        if origin not in origin_list:
+            origin_list.append(origin)
     return origin_list
 
 
