@@ -69,7 +69,28 @@ def _extract_vapi_tool_calls(payload: dict) -> list[dict]:
         return payload["tool_calls"]
     if payload.get("name") or payload.get("function"):
         return [payload]
+    inferred_name = _infer_direct_test_tool_name(payload)
+    if inferred_name:
+        return [{"id": "direct-test", "name": inferred_name, "arguments": payload}]
     return []
+
+
+def _infer_direct_test_tool_name(payload: dict) -> str | None:
+    if "full_name" in payload and "phone" in payload:
+        return "identify_or_create_patient"
+    if "phone" in payload:
+        return "lookup_patient_by_phone"
+    if "query" in payload or "department" in payload:
+        return "search_doctors"
+    if {"patient_id", "doctor_id", "scheduled_start", "scheduled_end"}.issubset(payload):
+        return "book_appointment"
+    if {"doctor_id", "scheduled_start", "scheduled_end"}.issubset(payload):
+        return "check_appointment_availability"
+    if {"appointment_code", "scheduled_start", "scheduled_end"}.issubset(payload):
+        return "reschedule_appointment"
+    if "appointment_code" in payload:
+        return "cancel_appointment"
+    return None
 
 
 def _normalize_tool_call(tool_call: dict) -> tuple[str | None, str | None, dict]:

@@ -13,7 +13,7 @@ services:
           name: medvoice-scheduler-db
           property: connectionString
       - key: BACKEND_CORS_ORIGINS
-        value: "https://medvoice-scheduler-poc-1.onrender.com,https://medvoice-scheduler-frontend.onrender.com,http://localhost:5173"
+        value: "https://medvoice-scheduler-poc-1.onrender.com,https://medvoice-scheduler-frontend.onrender.com,https://dashboard.vapi.ai,https://corsproxy.io,http://localhost:5173"
       - key: DB_SEED_ON_STARTUP
         value: "true"
       - key: OPENAI_REALTIME_MODEL

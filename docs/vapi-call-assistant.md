@@ -281,6 +281,17 @@ Content-Type: application/json
 }
 ```
 
+Vapi dashboard direct tool test body for phone lookup:
+
+```http
+POST https://YOUR_BACKEND_HOST/api/v1/vapi/tool-calls
+Content-Type: application/json
+
+{
+  "phone": "+966566200435"
+}
+```
+
 Check deployed DB data:
 
 ```http
