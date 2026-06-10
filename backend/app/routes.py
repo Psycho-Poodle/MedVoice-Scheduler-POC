@@ -55,10 +55,13 @@ def _extract_vapi_tool_calls(payload: dict) -> list[dict]:
     message = payload.get("message") if isinstance(payload, dict) else None
     if isinstance(message, dict):
         if isinstance(message.get("toolCallList"), list):
-            return [
-                {"id": item.get("id"), "name": item.get("name"), "arguments": item.get("parameters") or {}}
-                for item in message["toolCallList"]
-            ]
+            return message["toolCallList"]
+        if isinstance(message.get("toolWithToolCallList"), list):
+            calls = []
+            for item in message["toolWithToolCallList"]:
+                tool_call = item.get("toolCall") or {}
+                calls.append(tool_call or item)
+            return calls
         if isinstance(message.get("toolCalls"), list):
             return message["toolCalls"]
         if isinstance(message.get("tool_calls"), list):
@@ -238,8 +241,15 @@ def _run_vapi_tool(db: Session, tool_name: str | None, args: dict) -> dict:
     raise ValueError(f"Unsupported Vapi tool: {tool_name}")
 
 
-def _vapi_result(tool_call_id: str | None, result: dict | None = None, error: str | None = None) -> dict:
+def _vapi_result(
+    tool_call_id: str | None,
+    result: dict | None = None,
+    error: str | None = None,
+    tool_name: str | None = None,
+) -> dict:
     item = {"toolCallId": tool_call_id or "unknown"}
+    if tool_name:
+        item["name"] = tool_name
     if error:
         item["error"] = error.replace("\n", " ")
     else:
@@ -377,9 +387,9 @@ def vapi_single_tool_route(payload: dict, db: Session = Depends(get_db)) -> dict
     tool_call_id, tool_name, args = _normalize_tool_call(payload)
     try:
         result = _run_vapi_tool(db, tool_name, args)
-        return {"results": [_vapi_result(tool_call_id, result=result)]}
+        return {"results": [_vapi_result(tool_call_id, result=result, tool_name=tool_name)]}
     except Exception as exc:
-        return {"results": [_vapi_result(tool_call_id, error=str(exc))]}
+        return {"results": [_vapi_result(tool_call_id, error=str(exc), tool_name=tool_name)]}
 
 
 @router.post("/vapi/tool-calls")
@@ -393,9 +403,9 @@ def vapi_tool_calls_route(payload: dict, db: Session = Depends(get_db)) -> dict:
         tool_call_id, tool_name, args = _normalize_tool_call(tool_call)
         try:
             result = _run_vapi_tool(db, tool_name, args)
-            results.append(_vapi_result(tool_call_id, result=result))
+            results.append(_vapi_result(tool_call_id, result=result, tool_name=tool_name))
         except Exception as exc:
-            results.append(_vapi_result(tool_call_id, error=str(exc)))
+            results.append(_vapi_result(tool_call_id, error=str(exc), tool_name=tool_name))
     return {"results": results}
 
 

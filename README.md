@@ -34,6 +34,7 @@ POC monorepo scaffold for a voice-first medical scheduling system.
 - Assistant messages can also be replayed with the `Play` button.
 - Patients can use the `Call center` button to start a browser call with a Vapi medical center assistant.
 - Vapi setup instructions are in `docs/vapi-call-assistant.md`.
+- To let Vapi call your local Docker backend without Render cold starts, use `docs/cloudflare-tunnel-vapi.md`.
 
 ## Services (Planned)
 - `frontend` -> React app

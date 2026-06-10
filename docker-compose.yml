@@ -50,6 +50,16 @@ services:
       postgres:
         condition: service_healthy
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: medvoice-cloudflared
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-missing}
+    depends_on:
+      - backend
+
   mcp-server:
     build:
       context: .
